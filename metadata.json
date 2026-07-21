@@ -1,0 +1,6 @@
+{
+  "name": "Sanctuary",
+  "description": "A beautiful, privacy-first sanctuary featuring a private writing companion, passcode-secured diary lockbox, and custom loopable ambient soundscapes.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,71 @@
+# Miscellaneous / Local downloads
+flutter/
+sanctuary.zip
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*.rar
+
+# Large AI Models & Assets
+assets/.aistudio/
+assets/.aistudo/
+*.litertlm
+*.bin
+*.tflite
+*.task
+*.onnx
+*.pt
+*.safetensors
+*.bin
+
+# Compiled Binaries & Heap Dumps
+*.hprof
+*.apk
+*.aab
+*.so
+*.dylib
+*.dll
+
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+
+# Android
+android/.gradle/
+android/app/build/
+android/app/captures/
+android/app/app.iml
+android/local.properties
+android/key.properties
+*.keystore
+*.jks
+
+# iOS
+ios/Runner.xcodeproj/project.xcworkspace/
+ios/Runner.xcodeproj/xcuserdata/
+ios/Runner.xcworkspace/
+ios/.symlinks/
+ios/Pods/
+ios/Podfile.lock
+
+# Web / Node
+node_modules/
+dist/
+coverage/
+*.log
+
+# Environment, IDE & Agent Scratch
+.env*
+!.env.example
+.DS_Store
+.idea/
+.vscode/
+.agents/
+.gemini/
+scratch/

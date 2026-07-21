@@ -1,0 +1,33 @@
+name: sanctuary
+description: A beautiful, privacy-first sanctuary featuring a private writing companion, passcode-secured diary lockbox, and custom loopable ambient soundscapes.
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  path_provider: ^2.1.1
+  shared_preferences: ^2.2.2
+  flutter_secure_storage: ^9.0.0
+  sqflite: ^2.3.0
+  just_audio: ^0.9.36
+  crypto: ^3.0.3
+  uuid: ^4.3.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+
+  # assets:
+  #   - assets/audio/rain.mp3
+  #   - assets/audio/resonance.mp3
+  #   - assets/audio/bells.mp3
+

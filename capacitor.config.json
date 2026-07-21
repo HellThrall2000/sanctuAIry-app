@@ -1,0 +1,6 @@
+{
+  "appId": "private.sanctuary.app",
+  "appName": "Sanctuary",
+  "webDir": "dist",
+  "bundledWebRuntime": false
+}
