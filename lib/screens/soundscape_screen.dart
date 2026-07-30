@@ -47,11 +47,12 @@ class _SoundscapeWidgetState extends State<SoundscapeWidget> {
       try {
         await _player.setAsset(assetPath);
       } catch (_) {
-        String fallbackUrl = 'https://assets.mixkit.co/active_storage/sfx/2568/2568-84.wav'; // Rain fallback
+        // Reliable public ambient MP3 fallback URLs
+        String fallbackUrl = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3'; // Rain fallback
         if (soundType == 'resonance') {
-          fallbackUrl = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3'; // Drone fallback
+          fallbackUrl = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3'; // Drone fallback
         } else if (soundType == 'bells') {
-          fallbackUrl = 'https://assets.mixkit.co/active_storage/sfx/1814/1814-84.wav'; // Bell chimes fallback
+          fallbackUrl = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3'; // Bell chimes fallback
         }
         await _player.setUrl(fallbackUrl);
       }
@@ -240,12 +241,15 @@ class _SoundscapeWidgetState extends State<SoundscapeWidget> {
             children: [
               Icon(icon, size: 12, color: text),
               const SizedBox(width: 4),
-              Text(
-                name,
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                  color: text,
+              Flexible(
+                child: Text(
+                  name,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: text,
+                  ),
                 ),
               ),
             ],

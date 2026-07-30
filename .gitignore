@@ -1,71 +1,148 @@
-# Miscellaneous / Local downloads
+# ─────────────────────────────────────────────────────────────
+# Sanctuary — source-only repository.
+# The on-device model is ~2.5 GB and is NEVER committed; it is
+# side-loaded onto the device (see README "On-device model").
+# ─────────────────────────────────────────────────────────────
+
+# ── On-device AI models & weights ────────────────────────────
+# The model lives in assets/.aistudio/ locally and is pushed to
+# the device with adb. Belt and braces: ignore the folder AND
+# every weight format.
+assets/.aistudio/
+assets/.aistudo/
+*.litertlm
+*.tflite
+*.task
+*.bin
+*.gguf
+*.safetensors
+*.onnx
+*.pt
+*.pth
+*.ckpt
+*.h5
+*.pb
+*.npz
+*.mlmodel
+*.mlpackage
+*.aar
+
+# ── Archives & local downloads ───────────────────────────────
 flutter/
 sanctuary.zip
 *.zip
 *.tar
 *.tar.gz
+*.tgz
 *.7z
 *.rar
 
-# Large AI Models & Assets
-assets/.aistudio/
-assets/.aistudo/
-*.litertlm
-*.bin
-*.tflite
-*.task
-*.onnx
-*.pt
-*.safetensors
-*.bin
-
-# Compiled Binaries & Heap Dumps
+# ── Crash dumps, logcat captures & profiling output ──────────
+# Multi-MB debugging artifacts, not source. The *crash*.txt and
+# logcat*.txt patterns matter — the *.log rule does not match
+# them, so these were slipping through.
+*.log
+crash_log.txt
+*crash*.txt
+logcat*.txt
+tombstone*
 *.hprof
-*.apk
-*.aab
-*.so
-*.dylib
-*.dll
+*.dmp
+*.trace
+*.cpuprofile
+sanctuary_crash_log.txt
 
-# Flutter / Dart
+# ── Build output ─────────────────────────────────────────────
+build/
+dist/
+coverage/
 .dart_tool/
-.flutter-plugins
-.flutter-plugins-dependencies
 .packages
 .pub-cache/
 .pub/
-build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.fvm/
+*.iml
+*.ipr
+*.iws
 
-# Android
+# ── Compiled binaries & app packages ─────────────────────────
+*.apk
+*.aab
+*.ipa
+*.so
+*.dylib
+*.dll
+*.exe
+*.app
+
+# ── Android ──────────────────────────────────────────────────
 android/.gradle/
+android/.idea/
+android/.cxx/
+android/captures/
 android/app/build/
 android/app/captures/
+android/app/.cxx/
 android/app/app.iml
+# local.properties holds machine-specific SDK paths
 android/local.properties
 android/key.properties
 *.keystore
 *.jks
 
-# iOS
+# ── iOS ──────────────────────────────────────────────────────
+ios/Pods/
+ios/.symlinks/
+ios/Podfile.lock
+ios/Flutter/App.framework
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Flutter/Generated.xcconfig
+ios/Flutter/ephemeral/
+ios/Flutter/flutter_export_environment.sh
 ios/Runner.xcodeproj/project.xcworkspace/
 ios/Runner.xcodeproj/xcuserdata/
-ios/Runner.xcworkspace/
-ios/.symlinks/
-ios/Pods/
-ios/Podfile.lock
+ios/Runner.xcworkspace/xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.pbxuser
 
-# Web / Node
+# ── Desktop targets ──────────────────────────────────────────
+linux/flutter/ephemeral/
+macos/Flutter/ephemeral/
+macos/Pods/
+windows/flutter/ephemeral/
+
+# ── Web / Node ───────────────────────────────────────────────
 node_modules/
-dist/
-coverage/
-*.log
+.vite/
+*.tsbuildinfo
 
-# Environment, IDE & Agent Scratch
+# ── Secrets & environment ────────────────────────────────────
 .env*
 !.env.example
+*.pem
+*.p12
+*.p8
+secrets.json
+service-account*.json
+
+# ── Editors, OS & agent scratch ──────────────────────────────
 .DS_Store
+Thumbs.db
+desktop.ini
 .idea/
 .vscode/
+*.swp
+*~
 .agents/
 .gemini/
 scratch/
+# Shared project config (.claude/settings.json) IS committed;
+# only personal overrides are ignored.
+.claude/settings.local.json

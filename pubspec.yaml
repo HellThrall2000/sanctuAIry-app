@@ -17,6 +17,7 @@ dependencies:
   just_audio: ^0.9.36
   crypto: ^3.0.3
   uuid: ^4.3.3
+  flutter_litert_lm: ^0.3.0
 
 dev_dependencies:
   flutter_test:

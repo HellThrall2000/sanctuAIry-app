@@ -27,14 +27,10 @@ class _ChatScreenState extends State<ChatScreen> {
   final ScrollController _scrollController = ScrollController();
 
   bool _isGenerating = false;
-  bool _isModelLoaded = false;
-  String _modelLoadError = "";
-  String? _detectedModelPath;
 
   @override
   void initState() {
     super.initState();
-    _checkAndInitLocalModel();
     
     // Add welcome greeting
     _messages.add(ChatMessage(
@@ -44,50 +40,39 @@ class _ChatScreenState extends State<ChatScreen> {
     ));
   }
 
-  Future<void> _checkAndInitLocalModel() async {
-    final path = await _liteRtService.findLocalModelFile();
-    if (path != null) {
-      setState(() {
-        _detectedModelPath = path;
-      });
-      // Try to auto-initialize
-      final success = await _liteRtService.initializeModel(path: path);
-      setState(() {
-        _isModelLoaded = success;
-        if (!success) {
-          _modelLoadError = "Found .litertlm file but failed to load the model engine.";
-        }
-      });
-    } else {
-      setState(() {
-        _modelLoadError = "No local .litertlm file found in app documents. Place your fine-tuned model inside the app folder to enable edge-hosted companion chats.";
-      });
-    }
-  }
+  /// Persona plus any journals the user unlocked for this session.
+  ///
+  /// This is sent once, as a real system turn, when the conversation is opened.
+  /// Journals unlocked later in the session are not picked up until the
+  /// conversation is recreated.
+  String _buildSystemInstruction() {
+    final buffer = StringBuffer(
+      "You are Sanctuary, a compassionate private CBT writing companion. "
+      "Keep responses brief, supportive, and helpful.",
+    );
 
-  Future<void> _manualInitModel(String path) async {
-    setState(() {
-      _isGenerating = true;
-      _modelLoadError = "";
-    });
-    final success = await _liteRtService.initializeModel(path: path);
-    setState(() {
-      _isModelLoaded = success;
-      _isGenerating = false;
-      if (!success) {
-        _modelLoadError = "Failed to initialize .litertlm engine. Please verify format compatibility.";
+    if (widget.allowedJournals.isNotEmpty) {
+      buffer.writeln();
+      buffer.writeln();
+      buffer.writeln(
+        "The user unlocked these private journal entries and approved them "
+        "for this conversation:",
+      );
+      for (final entry in widget.allowedJournals) {
+        buffer.writeln();
+        buffer.writeln("Title: ${entry.title}");
+        buffer.writeln("Date: ${entry.date.split('T').first}");
+        buffer.writeln("Content: ${entry.content}");
       }
-    });
+    }
+
+    return buffer.toString();
   }
 
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-        );
+        _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
       }
     });
   }
@@ -102,48 +87,64 @@ class _ChatScreenState extends State<ChatScreen> {
       _isGenerating = true;
     });
     _scrollToBottom();
+    await Future.delayed(const Duration(milliseconds: 150));
 
-    if (!_isModelLoaded) {
+    // Lazy load the model on first prompt
+    if (!_liteRtService.isInitialized) {
+      final statusMessageIndex = _messages.length;
       setState(() {
         _messages.add(ChatMessage(
-          text: "Companion Offline: To chat, please make sure your fine-tuned LiteRT model (.litertlm) is loaded using the settings panel above.",
+          text: "⚡ Initializing local LiteRT Engine (mapping 2.5GB model file into memory, please wait a few seconds)...",
           isUser: false,
           timestamp: DateTime.now(),
         ));
-        _isGenerating = false;
       });
       _scrollToBottom();
-      return;
-    }
+      await Future.delayed(const Duration(milliseconds: 150));
 
-    // Compile dynamic context from unlocked allowed journal entries
-    String journalContext = "";
-    if (widget.allowedJournals.isNotEmpty) {
-      journalContext = "\n[Permitted Local Context: Here are the user's secure journals that they unlocked and approved for this conversation]\n";
-      for (var entry in widget.allowedJournals) {
-        journalContext += "Title: ${entry.title}\nDate: ${entry.date.split('T').first}\nContent: ${entry.content}\n\n";
+      final path = await _liteRtService.findLocalModelFile();
+      if (path != null) {
+        final error = await _liteRtService.initializeModel(
+          path: path,
+          systemInstruction: _buildSystemInstruction(),
+        );
+        if (error != null) {
+          setState(() {
+            _messages[statusMessageIndex] = ChatMessage(
+              text: "Failed to initialize companion: $error",
+              isUser: false,
+              timestamp: DateTime.now(),
+            );
+            _isGenerating = false;
+          });
+          _scrollToBottom();
+          return;
+        } else {
+          // Remove initialization status message once ready
+          setState(() {
+            _messages.removeAt(statusMessageIndex);
+          });
+        }
+      } else {
+        setState(() {
+          _messages[statusMessageIndex] = ChatMessage(
+            text: "Companion Offline: Could not find the model file on device.",
+            isUser: false,
+            timestamp: DateTime.now(),
+          );
+          _isGenerating = false;
+        });
+        _scrollToBottom();
+        return;
       }
     }
 
-    // Build complete conversation prompt with system directives
-    String fullPrompt = """
-You are Sanctuary, a beautiful private CBT writing companion.
-Your primary directive is to provide a non-judgmental, deeply compassionate therapeutic space.
-Here is the secure journal context that the user has unlocked and specifically permitted you to reference to help connect insights (if empty, proceed with standard support):
-$journalContext
-
-Please respond warmly, ask gentle reflective questions, and help them notice cognitive distortions (such as catastrophizing, all-or-nothing thinking, emotional reasoning). Keep responses focused, deeply human, and supportive. Use markdown formatting.
-
-Conversation History:
-""";
-
-    // Add recent history for context. Prune if context is too large (max token limit handling logic via limiting history).
-    // Let's limit to the last 4 messages to save tokens.
-    final historyMessages = _messages.skip(_messages.length > 4 ? _messages.length - 4 : 0);
-    for (var msg in historyMessages) {
-      fullPrompt += "${msg.isUser ? 'User' : 'Companion'}: ${msg.text}\n";
-    }
-    fullPrompt += "Companion: ";
+    // The persona and journal context are supplied once as the conversation's
+    // system instruction (see _buildSystemInstruction), and the runtime applies
+    // the chat template stored in the model's own metadata. So the model gets
+    // the user's plain text here — hand-writing turn tags would be tokenized as
+    // literal text and corrupt the prompt.
+    final fullPrompt = prompt;
 
     // Initialize blank message slot for streaming output
     final streamingMessage = ChatMessage(text: "", isUser: false, timestamp: DateTime.now());
@@ -200,10 +201,6 @@ Conversation History:
       backgroundColor: Colors.transparent, // Inherits deep black from main.dart
       body: Column(
         children: [
-          // LiteRT Model Loader Banner
-          if (!_isModelLoaded)
-            _buildModelSetupBanner(accentColor),
-
           // Conversation Area
           Expanded(
             child: ListView.builder(
@@ -274,53 +271,6 @@ Conversation History:
     );
   }
 
-  Widget _buildModelSetupBanner(Color accentColor) {
-    return Container(
-      margin: const EdgeInsets.all(16),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF111111),
-        border: Border.all(color: accentColor.withOpacity(0.4)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.info_outline, color: accentColor, size: 16),
-              const SizedBox(width: 6),
-              Text(
-                "EDGE INFERENCE SETUP (.litertlm)",
-                style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1, color: accentColor),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            _modelLoadError,
-            style: const TextStyle(fontSize: 11, height: 1.4, color: Colors.white70),
-          ),
-          const SizedBox(height: 12),
-          if (_detectedModelPath != null)
-            ElevatedButton(
-              onPressed: () => _manualInitModel(_detectedModelPath!),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: accentColor,
-                foregroundColor: Colors.black,
-                shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              ),
-              child: const Text("Initialize Detected Model", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
-            )
-          else
-            const Text(
-              "How to load: Connect your phone to your computer, open Android/iOS file explorer, and drop your model file inside the app's 'Documents' directory named exactly 'model.litertlm' or '.bin'. Then reboot the app.",
-              style: TextStyle(fontSize: 9, color: Colors.grey, height: 1.3),
-            ),
-        ],
-      ),
-    );
-  }
 
   Widget _buildMessageBubble(ChatMessage msg, Color accentColor) {
     final textColor = const Color(0xFFE2E6E9);

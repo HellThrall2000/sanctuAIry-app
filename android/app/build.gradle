@@ -58,6 +58,22 @@ android {
 }
 
 dependencies {
-    // Core LiteRT / MediaPipe GenAI On-Device LLM Inference Library
-    implementation 'com.google.mediapipe:tasks-genai:latest.release'
+    // flutter_litert_lm 0.3.0 pins litertlm-android:0.10.0, built from upstream
+    // 2026-04-11 — that runtime predates Gemma 4 and aborts inside
+    // nativeCreateEngine on a model whose LlmMetadata declares
+    // `llm_model_type { gemma4 }`. Gradle resolves to the highest version, so
+    // naming a newer one here upgrades the runtime the plugin loads.
+    //
+    // Pinned to 0.13.1, NOT latest: 0.14.0 changed `Backend.CPU`'s constructor
+    // from (Integer) to (Integer, Integer), and the plugin's precompiled Kotlin
+    // calls the old one — it dies with NoSuchMethodError in parseBackend().
+    // 0.13.1 is the newest release that keeps the signature the plugin expects.
+    // Verify with javap before bumping this; drop the override once the plugin
+    // updates its own pin.
+    implementation 'com.google.ai.edge.litertlm:litertlm-android:0.13.1'
+
+    // NOTE: com.google.mediapipe:tasks-genai was removed. No Android source
+    // referenced it (only ios/Runner/AppDelegate.swift, which this build does
+    // not touch), it resolved via the non-reproducible `latest.release`, and it
+    // ships native libraries that overlap liblitertlm_jni.so.
 }

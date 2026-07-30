@@ -13,6 +13,26 @@ subprojects {
     project.evaluationDependsOn(':app')
 }
 
+// flutter_litert_lm 0.3.0 declares litertlm-android:0.10.0, a runtime built from
+// upstream 2026-04-11 that predates Gemma 4 — it aborts inside nativeCreateEngine
+// on a model whose LlmMetadata declares `llm_model_type { gemma4 }`.
+//
+// Overriding the version in :app alone is not enough. Gradle packages a single
+// (highest) version, but each module still COMPILES against the version it
+// declares, so the plugin's bytecode kept referencing 0.10.0 signatures and blew
+// up with NoSuchMethodError on EngineConfig/Backend.CPU. Forcing it across all
+// subprojects makes the plugin compile and run against the same runtime.
+//
+// The plugin's Kotlin calls these constructors with named arguments, so the extra
+// parameters added in 0.10.2+ resolve to their defaults and it still compiles.
+subprojects {
+    configurations.all {
+        resolutionStrategy {
+            force 'com.google.ai.edge.litertlm:litertlm-android:0.13.1'
+        }
+    }
+}
+
 tasks.register("clean", Delete) {
     delete rootProject.buildDir
 }
