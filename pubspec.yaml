@@ -37,3 +37,25 @@ flutter:
   #   - assets/audio/resonance.mp3
   #   - assets/audio/bells.mp3
 
+  # Organic design system (see "Sanctuary design variations/"). Both families
+  # are SIL Open Font License; the licence texts ship in assets/fonts/.
+  #
+  # Figtree is only published upstream as a variable font. The three weights
+  # here are static instances cut from `Figtree[wght].ttf` with
+  # `fontTools.varLib.instancer`, because Flutter's mapping of `fontWeight`
+  # onto a variable font's `wght` axis varies by version — static instances
+  # render the same everywhere.
+  fonts:
+    - family: Caprasimo
+      fonts:
+        - asset: assets/fonts/Caprasimo-Regular.ttf
+          weight: 400
+    - family: Figtree
+      fonts:
+        - asset: assets/fonts/Figtree-400.ttf
+          weight: 400
+        - asset: assets/fonts/Figtree-600.ttf
+          weight: 600
+        - asset: assets/fonts/Figtree-700.ttf
+          weight: 700
+

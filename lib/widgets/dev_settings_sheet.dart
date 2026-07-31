@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../services/model_settings.dart';
+import '../theme/tokens.dart';
 
 /// Sampler tuning panel, debug builds only.
 ///
@@ -18,7 +19,7 @@ class DevSettingsSheet extends StatefulWidget {
     if (!kDebugMode) return Future.value(null);
     return showModalBottomSheet<ModelSettings>(
       context: context,
-      backgroundColor: const Color(0xFF0A0A0A),
+      backgroundColor: context.tokens.bgPanel,
       isScrollControlled: true,
       builder: (_) => DevSettingsSheet(initial: current),
     );
@@ -29,9 +30,11 @@ class DevSettingsSheet extends StatefulWidget {
 }
 
 class _DevSettingsSheetState extends State<DevSettingsSheet> {
-  static const _accent = Color(0xFF00E5FF);
-  static const _text = Color(0xFFE2E6E9);
-  static const _muted = Color(0xFF878F96);
+  // Read from the active palette rather than pinned: this sheet is debug
+  // only, but it should not be the one surface that ignores the theme.
+  Color get _accent => context.tokens.accentBg;
+  Color get _text => context.tokens.text;
+  Color get _muted => context.tokens.muted;
 
   late ModelSettings _draft = widget.initial.copy();
 
@@ -48,13 +51,13 @@ class _DevSettingsSheetState extends State<DevSettingsSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
+          Text(
             "Sampler",
             style: TextStyle(
                 color: _accent, fontSize: 16, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 4),
-          const Text(
+          Text(
             "Applying these restarts the conversation — the companion loses the current thread.",
             style: TextStyle(color: _muted, fontSize: 11),
           ),
@@ -65,22 +68,22 @@ class _DevSettingsSheetState extends State<DevSettingsSheet> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
             decoration: BoxDecoration(
-              border: Border.all(color: const Color(0xFF1A1A1A)),
-              color: const Color(0xFF050505),
+              border: Border.all(color: context.tokens.border),
+              color: context.tokens.bgSurface,
             ),
             child: Row(
               children: [
-                const Icon(Icons.memory, size: 14, color: _muted),
+                Icon(Icons.memory, size: 14, color: _muted),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     _draft.profile.label,
-                    style: const TextStyle(color: _text, fontSize: 12),
+                    style: TextStyle(color: _text, fontSize: 12),
                   ),
                 ),
                 Text(
                   "persona: ${_draft.profile.personaMode.name}",
-                  style: const TextStyle(color: _muted, fontSize: 10),
+                  style: TextStyle(color: _muted, fontSize: 10),
                 ),
               ],
             ),
@@ -92,7 +95,7 @@ class _DevSettingsSheetState extends State<DevSettingsSheet> {
             "temp ${_draft.profile.temperature}, "
             "topK ${_draft.profile.topK}, "
             "topP ${_draft.profile.topP}.",
-            style: const TextStyle(color: _muted, fontSize: 10),
+            style: TextStyle(color: _muted, fontSize: 10),
           ),
           const SizedBox(height: 16),
           _slider(
@@ -133,12 +136,12 @@ class _DevSettingsSheetState extends State<DevSettingsSheet> {
             children: [
               TextButton(
                 onPressed: () => setState(() => _draft = ModelSettings()),
-                child: const Text("Defaults", style: TextStyle(color: _muted)),
+                child: Text("Defaults", style: TextStyle(color: _muted)),
               ),
               const Spacer(),
               TextButton(
                 onPressed: () => Navigator.pop(context),
-                child: const Text("Cancel", style: TextStyle(color: _muted)),
+                child: Text("Cancel", style: TextStyle(color: _muted)),
               ),
               const SizedBox(width: 8),
               ElevatedButton(
@@ -172,20 +175,20 @@ class _DevSettingsSheetState extends State<DevSettingsSheet> {
         Row(
           children: [
             Text(label,
-                style: const TextStyle(
+                style: TextStyle(
                     color: _text, fontSize: 13, fontWeight: FontWeight.bold)),
             const Spacer(),
-            Text(display, style: const TextStyle(color: _accent, fontSize: 13)),
+            Text(display, style: TextStyle(color: _accent, fontSize: 13)),
           ],
         ),
-        Text(hint, style: const TextStyle(color: _muted, fontSize: 10)),
+        Text(hint, style: TextStyle(color: _muted, fontSize: 10)),
         Slider(
           value: value.clamp(min, max),
           min: min,
           max: max,
           divisions: divisions,
           activeColor: _accent,
-          inactiveColor: const Color(0xFF1A1A1A),
+          inactiveColor: context.tokens.border,
           onChanged: onChanged,
         ),
       ],

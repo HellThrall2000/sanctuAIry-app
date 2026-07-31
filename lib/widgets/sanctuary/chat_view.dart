@@ -1,44 +1,147 @@
-import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:collection';
+import 'dart:math' as math;
+
+import 'package:flutter/material.dart';
 import 'package:flutter_litert_lm/flutter_litert_lm.dart';
-import '../models/journal_entry.dart';
-import '../models/memory_fact.dart';
-import '../services/memory_store.dart';
-import '../services/crisis_guard.dart';
-import '../services/litert_service.dart';
-import '../services/model_preference.dart';
-import '../services/model_profile.dart';
-import '../services/model_settings.dart';
-import '../services/persona.dart';
-import '../services/reply_sanitizer.dart';
-import '../widgets/dev_settings_sheet.dart';
+
+import '../../models/journal_entry.dart';
+import '../../models/memory_fact.dart';
+import '../../services/crisis_guard.dart';
+import '../../services/litert_service.dart';
+import '../../services/memory_store.dart';
+import '../../services/model_preference.dart';
+import '../../services/model_settings.dart';
+import '../../services/persona.dart';
+import '../../services/reply_sanitizer.dart';
+import '../../theme/tokens.dart';
+import '../../theme/typography.dart';
+import '../dev_settings_sheet.dart';
+import '../organic/organic.dart';
 
 class ChatMessage {
   final String text;
   final bool isUser;
   final DateTime timestamp;
 
-  ChatMessage({required this.text, required this.isUser, required this.timestamp});
+  ChatMessage({
+    required this.text,
+    required this.isUser,
+    required this.timestamp,
+  });
 }
 
-class ChatScreen extends StatefulWidget {
-  final List<JournalEntry> allowedJournals;
+/// The measurements that differ between the two shells.
+///
+/// 1a and 1c share every pixel of chat behaviour and none of its dimensions —
+/// the phone layout runs wider bubbles at a smaller size and swaps the "Send"
+/// pill for a circular arrow. Carrying that as data keeps one [ChatView].
+class ChatViewStyle {
+  final double bubbleFontSize;
+  final double bubbleMaxWidthFactor;
+  final double bubbleRadius;
+  final EdgeInsets bubblePadding;
+  final EdgeInsets listPadding;
+  final EdgeInsets promptsPadding;
+  final double promptsGap;
+  final double promptFontSize;
+  final bool centerPrompts;
+  final EdgeInsets composerPadding;
 
-  const ChatScreen({Key? key, required this.allowedJournals}) : super(key: key);
+  /// 1a docks the composer on a panel-coloured bar with a top rule; 1c lets it
+  /// float on the page background.
+  final bool composerOnPanel;
+
+  /// 1c sends with a 40px circular arrow instead of a "Send" pill.
+  final bool circularSend;
+
+  /// Widest the conversation column is allowed to get.
+  ///
+  /// 1a is drawn against a 960px card. Letting it stretch to a 2800px tablet
+  /// would put a 70%-width bubble at ~1960px — several times a readable
+  /// measure — so the column caps at the width the design was composed for and
+  /// centres in anything wider. 1c is phone-width already and takes no cap.
+  final double maxContentWidth;
+
+  const ChatViewStyle.warmCompanion()
+      : maxContentWidth = 960,
+        bubbleFontSize = 13.5,
+        bubbleMaxWidthFactor = 0.70,
+        bubbleRadius = 16,
+        bubblePadding = const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        listPadding = const EdgeInsets.symmetric(horizontal: 26, vertical: 20),
+        promptsPadding = const EdgeInsets.fromLTRB(26, 0, 26, 10),
+        promptsGap = 8,
+        promptFontSize = 11,
+        centerPrompts = false,
+        composerPadding =
+            const EdgeInsets.symmetric(horizontal: 26, vertical: 14),
+        composerOnPanel = true,
+        circularSend = false;
+
+  const ChatViewStyle.focusBloom()
+      : maxContentWidth = double.infinity,
+        bubbleFontSize = 13,
+        bubbleMaxWidthFactor = 0.78,
+        bubbleRadius = 18,
+        bubblePadding = const EdgeInsets.symmetric(horizontal: 15, vertical: 11),
+        listPadding = const EdgeInsets.symmetric(horizontal: 22, vertical: 8),
+        promptsPadding = const EdgeInsets.fromLTRB(22, 6, 22, 4),
+        promptsGap = 6,
+        promptFontSize = 10,
+        centerPrompts = true,
+        composerPadding = const EdgeInsets.fromLTRB(22, 10, 22, 0),
+        composerOnPanel = false,
+        circularSend = true;
+}
+
+/// The companion conversation.
+///
+/// Deliberately not a [Scaffold]: 1a stacks it under a header between two
+/// drawers, 1c floats it above a pill tab bar. The shell owns the chrome.
+///
+/// The generation logic below — crisis triage, memory recall, reseeding,
+/// repeat detection — is carried over unchanged from the previous
+/// `ChatScreen`. Only the presentation is new. Each piece of it was arrived at
+/// against a specific on-device failure and the comments record which.
+class ChatView extends StatefulWidget {
+  final List<JournalEntry> allowedJournals;
+  final ChatViewStyle style;
+
+  const ChatView({
+    super.key,
+    required this.allowedJournals,
+    required this.style,
+  });
 
   @override
-  State<ChatScreen> createState() => _ChatScreenState();
+  State<ChatView> createState() => _ChatViewState();
 }
 
-class _ChatScreenState extends State<ChatScreen> {
+class _ChatViewState extends State<ChatView> {
   final LiteRtService _liteRtService = LiteRtService();
   final List<ChatMessage> _messages = [];
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
   bool _isGenerating = false;
+
+  /// The three seed phrases offered above the composer.
+  static const _quickPrompts = <({String label, String text})>[
+    (
+      label: 'Deep Reflection',
+      text: "I'd like to sit with something that's been weighing on me...",
+    ),
+    (
+      label: 'Stream of Consciousness',
+      text:
+          "Let's write down my raw, unfiltered thoughts and see where they lead...",
+    ),
+    (
+      label: 'Focus on Wonder',
+      text: 'I want to notice something small and good today...',
+    ),
+  ];
 
   /// Openers from the last few replies. The runtime exposes no repetition
   /// penalty, so we discourage reuse in the prompt instead — without this the
@@ -71,8 +174,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   final MemoryStore _memory = MemoryStore();
 
-  /// Cached personal facts, rendered for the prompt. Read once when the model is
-  /// initialised — see [MemoryStore] for why it is not refreshed mid-session.
+  /// Cached personal facts, rendered for the prompt. Read once when the model
+  /// is initialised — see [MemoryStore] for why it is not refreshed mid-session.
   String? _profileBlock;
 
   /// The turns actually sent to the model, in order.
@@ -85,27 +188,33 @@ class _ChatScreenState extends State<ChatScreen> {
   final List<LiteLmMessage> _modelTranscript = [];
 
   /// Sampler values plus the profile they belong to. Replaced once the model
-  /// file is located and its profile is known — see [_prepareModel].
+  /// file is located and its profile is known.
   ModelSettings _settings = ModelSettings();
 
   @override
   void initState() {
     super.initState();
-
-    // Add welcome greeting
     _messages.add(ChatMessage(
-      text: "Welcome to your personal Sanctuary companion. I am an on-device, fully-offline intelligence. I have zero access to the cloud, meaning our conversation never leaves this mobile device.\n\nHow can I support your reflections or mindfulness today?",
+      text: 'Welcome to your private Sanctuary. Here, your thoughts can '
+          'unfold freely — everything we discuss stays only on this device.',
       isUser: false,
       timestamp: DateTime.now(),
     ));
   }
 
+  @override
+  void dispose() {
+    _textController.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
   /// Persona plus any journals the user unlocked for this session.
   ///
   /// How much persona the model can take depends on which model it is — see
-  /// [Persona.instructionFor] and [ModelProfile]. Stock Gemma 4 E2B follows a
-  /// full persona; the fine-tune answers substantive prompts with session-opener
-  /// boilerplate when given one, so it gets safety text only.
+  /// [Persona.instructionFor] and `ModelProfile`. Stock Gemma 4 E2B follows a
+  /// full persona; the fine-tune answers substantive prompts with
+  /// session-opener boilerplate when given one, so it gets safety text only.
   ///
   /// The journal dump below does not scale: every allowed entry is pasted in
   /// full, so a user with 50 entries blows the 4096-token context. It is
@@ -120,9 +229,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final buffer = StringBuffer(persona ?? '');
 
-    // Cached personal facts, carried across sessions. Unlike the journal dump
-    // below this is bounded (MemoryStore.maxProfileFacts) and does not grow with
-    // use.
     if (_profileBlock != null) {
       buffer.writeln();
       buffer.writeln();
@@ -133,14 +239,14 @@ class _ChatScreenState extends State<ChatScreen> {
       buffer.writeln();
       buffer.writeln();
       buffer.writeln(
-        "The user unlocked these private journal entries and approved them "
-        "for this conversation:",
+        'The user unlocked these private journal entries and approved them '
+        'for this conversation:',
       );
       for (final entry in widget.allowedJournals) {
         buffer.writeln();
-        buffer.writeln("Title: ${entry.title}");
-        buffer.writeln("Date: ${entry.date.split('T').first}");
-        buffer.writeln("Content: ${entry.content}");
+        buffer.writeln('Title: ${entry.title}');
+        buffer.writeln('Date: ${entry.date.split('T').first}');
+        buffer.writeln('Content: ${entry.content}');
       }
     }
 
@@ -161,7 +267,11 @@ class _ChatScreenState extends State<ChatScreen> {
 
     _textController.clear();
     setState(() {
-      _messages.add(ChatMessage(text: prompt, isUser: true, timestamp: DateTime.now()));
+      _messages.add(ChatMessage(
+        text: prompt,
+        isUser: true,
+        timestamp: DateTime.now(),
+      ));
       _isGenerating = true;
     });
     _scrollToBottom();
@@ -189,21 +299,21 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     if (level == CrisisLevel.concern) _concernTurns++;
 
-    // Learn from what the user just said. Deterministic and instant, so it costs
-    // nothing on the turn — see FactExtractor for why this is not a model pass.
-    // Not awaited into the reply path: a failed write must never block a
+    // Learn from what the user just said. Deterministic and instant, so it
+    // costs nothing on the turn — see FactExtractor for why this is not a model
+    // pass. Not awaited into the reply path: a failed write must never block a
     // conversation.
     unawaited(_memory.learnFromMessage(prompt).catchError((Object e) {
       debugPrint('Memory write failed: $e');
       return <MemoryFact>[];
     }));
 
-    // Lazy load the model on first prompt
     if (!_liteRtService.isInitialized) {
       final statusMessageIndex = _messages.length;
       setState(() {
         _messages.add(ChatMessage(
-          text: "⚡ Initializing local LiteRT Engine (mapping 2.5GB model file into memory, please wait a few seconds)...",
+          text: 'Waking the companion — mapping the model into memory. '
+              'This takes a few seconds the first time.',
           isUser: false,
           timestamp: DateTime.now(),
         ));
@@ -227,10 +337,11 @@ class _ChatScreenState extends State<ChatScreen> {
           systemInstruction: _buildSystemInstruction(),
           initialMessages: Persona.exemplars(),
         );
+        if (!mounted) return;
         if (error != null) {
           setState(() {
             _messages[statusMessageIndex] = ChatMessage(
-              text: "Failed to initialize companion: $error",
+              text: 'The companion could not start: $error',
               isUser: false,
               timestamp: DateTime.now(),
             );
@@ -238,16 +349,12 @@ class _ChatScreenState extends State<ChatScreen> {
           });
           _scrollToBottom();
           return;
-        } else {
-          // Remove initialization status message once ready
-          setState(() {
-            _messages.removeAt(statusMessageIndex);
-          });
         }
+        setState(() => _messages.removeAt(statusMessageIndex));
       } else {
         setState(() {
           _messages[statusMessageIndex] = ChatMessage(
-            text: "Companion Offline: Could not find the model file on device.",
+            text: 'Companion offline — the model file is not on this device.',
             isUser: false,
             timestamp: DateTime.now(),
           );
@@ -264,17 +371,13 @@ class _ChatScreenState extends State<ChatScreen> {
     // the user's plain text here — hand-writing turn tags would be tokenized as
     // literal text and corrupt the prompt.
     //
-    // The only addition is a one-line nudge when the companion has been opening
-    // replies the same way. It is omitted entirely when there is nothing to
-    // avoid, so we don't pay the tokens on every turn.
     // Facts relevant to *this* message. The pinned profile is fixed at
-    // conversation creation, so anything beyond it has to arrive with the turn —
-    // rebuilding the system instruction per turn would mean re-prefilling the
+    // conversation creation, so anything beyond it has to arrive with the turn
+    // — rebuilding the system instruction per turn would mean re-prefilling the
     // whole history. Usually null: FactRanker only fires on a real match, which
     // keeps short messages from being swamped by meta-text.
-    final recall = await _memory
-        .recallBlock(prompt)
-        .catchError((Object e) => null);
+    final recall =
+        await _memory.recallBlock(prompt).catchError((Object e) => null);
 
     final hint = Persona.repetitionHint(_recentOpeners);
     final fullPrompt = [
@@ -283,11 +386,9 @@ class _ChatScreenState extends State<ChatScreen> {
       if (hint != null) hint,
     ].join('\n\n');
 
-    // Initialize blank message slot for streaming output
-    final streamingMessage = ChatMessage(text: "", isUser: false, timestamp: DateTime.now());
-    setState(() {
-      _messages.add(streamingMessage);
-    });
+    final streamingMessage =
+        ChatMessage(text: '', isUser: false, timestamp: DateTime.now());
+    setState(() => _messages.add(streamingMessage));
 
     String reply;
     try {
@@ -309,7 +410,7 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!mounted) return;
       setState(() {
         _messages[_messages.length - 1] = ChatMessage(
-          text: "Failed during edge inference: $err",
+          text: 'Something went wrong during inference: $err',
           isUser: false,
           timestamp: streamingMessage.timestamp,
         );
@@ -353,7 +454,6 @@ class _ChatScreenState extends State<ChatScreen> {
     final buffer = StringBuffer();
     StreamSubscription<String>? subscription;
 
-    /// Repaints the slot and reports whether the model has started looping.
     bool paint({required bool streaming}) {
       final sanitized =
           ReplySanitizer.cleanDetailed(buffer.toString(), streaming: streaming);
@@ -441,7 +541,6 @@ class _ChatScreenState extends State<ChatScreen> {
         ..add(_modelTranscript[i + 1]);
     }
 
-    // Bound the re-prefill and let old attractors age out of context.
     const limit = _replayExchangeLimit * 2;
     return kept.length <= limit ? kept : kept.sublist(kept.length - limit);
   }
@@ -479,8 +578,8 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   /// Opens the sampler tuning panel (debug builds only — see
-  /// [DevSettingsSheet]). Reachable by long-pressing the input field, which
-  /// keeps it out of the way of normal use.
+  /// [DevSettingsSheet]). Reachable by long-pressing the composer, which keeps
+  /// it out of the way of normal use.
   Future<void> _openDevSettings() async {
     final updated = await DevSettingsSheet.show(context, _settings);
     if (updated == null || !mounted) return;
@@ -494,8 +593,9 @@ class _ChatScreenState extends State<ChatScreen> {
       setState(() {
         _messages.add(ChatMessage(
           text: err == null
-              ? "Sampler updated ($updated). The companion has lost the earlier thread."
-              : "Could not apply sampler settings: $err",
+              ? 'Sampler updated ($updated). The companion has lost the '
+                  'earlier thread.'
+              : 'Could not apply sampler settings: $err',
           isUser: false,
           timestamp: DateTime.now(),
         ));
@@ -510,127 +610,270 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  // ---------------------------------------------------------------- rendering
+
   @override
   Widget build(BuildContext context) {
-    // Strictly dark themed per specs
-    const accentColor = Color(0xFF00E5FF);
-    const inputBg = Color(0xFF0A0A0A);
+    final s = widget.style;
 
-    return Scaffold(
-      backgroundColor: Colors.transparent, // Inherits deep black from main.dart
-      body: Column(
-        children: [
-          // Conversation Area
-          Expanded(
-            child: ListView.builder(
+    return Column(
+      // Stretch, not the default centre: without it the quick-prompt row
+      // shrink-wraps its chips and centres them, and 1a aligns them left.
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Expanded(
+          child: _capped(
+            ListView.builder(
               controller: _scrollController,
-              padding: const EdgeInsets.all(16),
+              padding: s.listPadding,
               itemCount: _messages.length,
-              itemBuilder: (context, index) {
-                final msg = _messages[index];
-                return _buildMessageBubble(msg, accentColor);
-              },
+              itemBuilder: (context, index) => _bubble(_messages[index]),
             ),
           ),
+        ),
+        _capped(_quickPromptRow()),
+        // The composer bar's background spans the full width — it is chrome,
+        // and a floating 960px strip would leave the rule hanging in mid-air —
+        // so only its contents are capped.
+        _composer(),
+      ],
+    );
+  }
 
-          // First token loading indicator
-          if (_isGenerating && _messages.isNotEmpty && _messages.last.text.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 8.0),
-              child: SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(color: accentColor, strokeWidth: 2),
+  /// Centres [child] in anything wider than the design's own canvas.
+  ///
+  /// Sized tightly rather than merely constrained: a loose `maxWidth` lets a
+  /// [Wrap] shrink-wrap its children, which silently centres the quick-prompt
+  /// chips no matter what `WrapAlignment` they are given.
+  Widget _capped(Widget child) {
+    final max = widget.style.maxContentWidth;
+    if (max == double.infinity) return child;
+    return LayoutBuilder(
+      builder: (context, constraints) => Center(
+        child: SizedBox(
+          width: math.min(constraints.maxWidth, max),
+          child: child,
+        ),
+      ),
+    );
+  }
+
+  Widget _bubble(ChatMessage msg) {
+    final t = context.tokens;
+    final s = widget.style;
+
+    // An empty assistant slot is the moment between sending and the first
+    // token. The prototype has no such state; showing the pending indicator
+    // here is what keeps the wait from looking like a dropped message.
+    if (!msg.isUser && msg.text.isEmpty) {
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Container(
+            padding: s.bubblePadding,
+            decoration: BoxDecoration(
+              color: t.assistantBubbleBg,
+              borderRadius: BorderRadius.circular(s.bubbleRadius),
+            ),
+            child: _TypingDots(color: t.assistantBubbleFg),
+          ),
+        ),
+      );
+    }
+
+    final isUser = msg.isUser;
+    return Align(
+      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+      child: Padding(
+        // `gap: 12px` between bubbles.
+        padding: const EdgeInsets.only(bottom: 12),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            // Measured against the column the bubble actually lives in, not the
+            // window — once the conversation is capped at 960 those differ, and
+            // using the window would let a bubble overflow its own column.
+            maxWidth: (math.min(
+                      MediaQuery.sizeOf(context).width,
+                      s.maxContentWidth,
+                    ) -
+                    s.listPadding.horizontal) *
+                s.bubbleMaxWidthFactor,
+          ),
+          child: Container(
+            padding: s.bubblePadding,
+            decoration: BoxDecoration(
+              color: isUser ? t.userBubbleBg : t.assistantBubbleBg,
+              borderRadius: BorderRadius.circular(s.bubbleRadius),
+            ),
+            child: SelectableText(
+              msg.text,
+              style: OrganicText.bubble(
+                isUser ? t.userBubbleFg : t.assistantBubbleFg,
+                size: s.bubbleFontSize,
               ),
             ),
-
-          // Typing Input Row
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: const BoxDecoration(
-              color: inputBg,
-              border: Border(top: BorderSide(color: Color(0xFF1A1A1A))),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  // Long-press opens the sampler panel in debug builds; it is a
-                  // no-op in release, so normal users never see it.
-                  child: GestureDetector(
-                    onLongPress: _openDevSettings,
-                    child: TextField(
-                    controller: _textController,
-                    maxLines: null,
-                    enabled: !_isGenerating,
-                    onSubmitted: (_) => _sendMessage(),
-                    decoration: const InputDecoration(
-                      hintText: "Write your thoughts...",
-                      hintStyle: TextStyle(fontSize: 14, color: Color(0xFF555555)),
-                      border: InputBorder.none,
-                    ),
-                    style: const TextStyle(fontSize: 14, color: Color(0xFFE2E6E9)),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                GestureDetector(
-                  onTap: _isGenerating ? null : _sendMessage,
-                  child: Container(
-                    width: 40,
-                    height: 40,
-                    decoration: const BoxDecoration(
-                      color: accentColor,
-                      shape: BoxShape.circle,
-                    ),
-                    child: _isGenerating
-                        ? const Icon(Icons.stop_rounded, color: Colors.black, size: 20)
-                        : const Icon(Icons.arrow_upward_rounded, color: Colors.black, size: 20),
-                  ),
-                ),
-              ],
-            ),
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _quickPromptRow() {
+    final s = widget.style;
+    return Padding(
+      padding: s.promptsPadding,
+      child: Wrap(
+        spacing: s.promptsGap,
+        runSpacing: s.promptsGap,
+        alignment: s.centerPrompts ? WrapAlignment.center : WrapAlignment.start,
+        children: [
+          for (final p in _quickPrompts)
+            OrganicTag(
+              label: p.label,
+              variant: OrganicTagVariant.outline,
+              fontSize: s.promptFontSize,
+              // "click sets the input field's text to a seed phrase (does not
+              // auto-send)".
+              onTap: _isGenerating
+                  ? null
+                  : () => setState(() {
+                        _textController.text = p.text;
+                        _textController.selection =
+                            TextSelection.collapsed(offset: p.text.length);
+                      }),
+            ),
         ],
       ),
     );
   }
 
+  Widget _composer() {
+    final t = context.tokens;
+    final s = widget.style;
 
-  Widget _buildMessageBubble(ChatMessage msg, Color accentColor) {
-    final textColor = const Color(0xFFE2E6E9);
-    final align = msg.isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start;
+    return Container(
+      padding: s.composerPadding,
+      decoration: s.composerOnPanel
+          ? BoxDecoration(
+              color: t.bgPanel,
+              border: Border(top: BorderSide(color: t.border)),
+            )
+          : null,
+      child: SafeArea(
+        top: false,
+        child: _capped(Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Expanded(
+              // Long-press opens the sampler panel in debug builds; it is a
+              // no-op in release, so normal users never see it.
+              child: GestureDetector(
+                onLongPress: _openDevSettings,
+                child: OrganicInput(
+                  controller: _textController,
+                  enabled: !_isGenerating,
+                  hint: s.circularSend
+                      ? "What's on your mind..."
+                      : "Explore what's on your mind...",
+                  textInputAction: TextInputAction.send,
+                  onSubmitted: (_) => _sendMessage(),
+                ),
+              ),
+            ),
+            SizedBox(width: s.circularSend ? 8 : 10),
+            _sendButton(),
+          ],
+        )),
+      ),
+    );
+  }
 
-    // Don't show an empty bubble when first token is loading
-    if (!msg.isUser && msg.text.isEmpty) {
-      return const SizedBox.shrink();
+  Widget _sendButton() {
+    final t = context.tokens;
+
+    if (!widget.style.circularSend) {
+      return OrganicButton(
+        label: 'Send',
+        onPressed: _isGenerating ? null : _sendMessage,
+      );
     }
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: Column(
-        crossAxisAlignment: align,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            constraints: const BoxConstraints(maxWidth: 300),
-            decoration: BoxDecoration(
-              border: Border(
-                left: !msg.isUser ? BorderSide(color: accentColor, width: 2) : BorderSide.none,
-                right: msg.isUser ? BorderSide(color: accentColor, width: 2) : BorderSide.none,
-              ),
-              color: const Color(0xFF0A0A0A),
-            ),
+    // 1c: a 40px circle carrying the "→" glyph, drawn with text rather than an
+    // icon font exactly as the prototype does.
+    return SizedBox(
+      width: 40,
+      height: 40,
+      child: Material(
+        color: _isGenerating
+            ? Color.lerp(t.accentBg, t.bgApp, 0.45)!
+            : t.accentBg,
+        shape: const CircleBorder(),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: _isGenerating ? null : _sendMessage,
+          splashFactory: NoSplash.splashFactory,
+          highlightColor: Colors.black.withValues(alpha: 0.14),
+          child: Center(
             child: Text(
-              msg.text,
-              style: TextStyle(fontSize: 14, height: 1.45, color: textColor),
+              '→',
+              style: TextStyle(
+                fontFamily: Organic.headingFont,
+                fontSize: 17,
+                height: 1.0,
+                color: t.onAccent,
+              ),
             ),
           ),
-          const SizedBox(height: 4),
-          Text(
-            msg.isUser ? "You" : "Sanctuary On-Device Model",
-            style: const TextStyle(fontSize: 9, color: Color(0xFF555555), fontWeight: FontWeight.bold),
-          ),
-        ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Three dots that fade in sequence while the first token is pending.
+class _TypingDots extends StatefulWidget {
+  final Color color;
+
+  const _TypingDots({required this.color});
+
+  @override
+  State<_TypingDots> createState() => _TypingDotsState();
+}
+
+class _TypingDotsState extends State<_TypingDots>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1200),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: List.generate(3, (i) {
+          // Each dot peaks a third of a cycle after the one before it.
+          final phase = (_controller.value - i * 0.2) % 1.0;
+          final opacity = 0.3 + 0.7 * (phase < 0.5 ? phase * 2 : (1 - phase) * 2);
+          return Container(
+            width: 5,
+            height: 5,
+            margin: EdgeInsets.only(left: i == 0 ? 0 : 4),
+            decoration: BoxDecoration(
+              color: widget.color.withValues(alpha: opacity.clamp(0.0, 1.0)),
+              shape: BoxShape.circle,
+            ),
+          );
+        }),
       ),
     );
   }
