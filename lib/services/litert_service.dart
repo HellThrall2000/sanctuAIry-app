@@ -1,18 +1,19 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_litert_lm/flutter_litert_lm.dart';
+import 'model_profile.dart';
+import 'model_settings.dart';
 
 /// Wraps the native LiteRT-LM engine (`liblitertlm_jni.so`) for Sanctuary.
 ///
-/// CPU is the correct and intended backend for a `.litertlm` model — Google's
-/// own Gemma 4 E2B build is a 2,583 MB file that peaks at ~1,733 MB RSS on an
-/// Android CPU. The model currently shipped with Sanctuary is the same size
-/// (2,549 MB) but peaks at 6,000-7,400 MB, so the app is killed with
-/// `reason=3 (LOW_MEMORY)` before it emits a token. That ~4x gap is a defect in
-/// how the model was converted, not something this class can work around; see
-/// README "Known blocking issue" for the measurements and the conversion plan.
+/// CPU is the correct and intended backend for a `.litertlm` model. The earlier
+/// `reason=3 (LOW_MEMORY)` kills were a conversion defect — the model had been
+/// quantized with `weight_only_wi4_afp32`, which stores INT4 but computes in
+/// FP32 and so expands ~8x under XNNPACK. Re-exported with `dynamic_wi4_afp32`
+/// it peaks at ~1,543 MB. See README for the measurements.
 ///
 /// Load is exclusive and reentrancy-guarded — two concurrent engines would
 /// double an already-marginal footprint.
@@ -28,55 +29,93 @@ class LiteRtService {
   LiteLmBackend? _activeBackend;
   Future<String?>? _pendingInit;
 
+  // Retained so [reconfigure] and [reseed] can rebuild an equivalent
+  // conversation without reloading the 2.5 GB model.
+  String? _systemInstruction;
+  List<LiteLmMessage>? _initialMessages;
+  ModelSettings? _settings;
+
+  final Random _random = Random();
+
+  /// A fresh sampler seed.
+  ///
+  /// The native `SamplerConfig.seed` is a Kotlin `Int`, so this stays inside
+  /// signed 32-bit range. Without it the seed is 0 on every conversation and
+  /// generation is fully reproducible — the cause of the companion repeating
+  /// itself verbatim. See packages/flutter_litert_lm/VENDOR.md.
+  int _nextSeed() => _random.nextInt(0x7FFFFFFF);
+
   bool get isInitialized => _isInitialized;
   String? get modelPath => _modelPath;
 
   /// Which backend the engine actually came up on — GPU or the CPU fallback.
   LiteLmBackend? get activeBackend => _activeBackend;
 
-  /// Locates the default model path or searches the app documents directory for a .litertlm file
-  Future<String?> findLocalModelFile() async {
+  /// Every `.litertlm` on the device, each paired with the profile it should run
+  /// under.
+  ///
+  /// Both the stock model and the fine-tune can be present at once — that is the
+  /// point, so development can continue on stock while the fine-tune is being
+  /// retrained. Directories are searched in order of specificity, and results are
+  /// deduplicated by path.
+  Future<List<LocatedModel>> findLocalModels() async {
+    final searchDirs = <String>[];
     try {
       final extDir = await getExternalStorageDirectory();
-      if (extDir != null) {
-        final extFile = File('${extDir.path}/model.litertlm');
-        if (await extFile.exists()) {
-          print("Found local model file at: ${extFile.path} (Size: ${await extFile.length()} bytes)");
-          return extFile.path;
-        }
-      }
-
-      final directory = await getApplicationDocumentsDirectory();
-
-      // Look for a .litertlm or .bin file inside the documents directory
-      final entities = await directory.list().toList();
-      for (var entity in entities) {
-        if (entity is File &&
-            (entity.path.endsWith('.litertlm') || entity.path.endsWith('.bin'))) {
-          return entity.path;
-        }
-      }
-
-      // Fallback: Check standard model path
-      final defaultFile = File('${directory.path}/model.litertlm');
-      if (await defaultFile.exists()) {
-        return defaultFile.path;
-      }
-
-      // Fallback: Check SD Card locations
-      final sdcardFile = File('/sdcard/Download/model.litertlm');
-      if (await sdcardFile.exists()) {
-        return sdcardFile.path;
-      }
-
-      final sdcardFile2 = File('/sdcard/model.litertlm');
-      if (await sdcardFile2.exists()) {
-        return sdcardFile2.path;
-      }
+      if (extDir != null) searchDirs.add(extDir.path);
+      searchDirs.add((await getApplicationDocumentsDirectory()).path);
     } catch (e) {
-      print("Error locating local model file: $e");
+      print("Error resolving app directories: $e");
     }
-    return null;
+    searchDirs.addAll(const ['/sdcard/Download', '/sdcard']);
+
+    final found = <String, LocatedModel>{};
+    for (final dir in searchDirs) {
+      try {
+        final directory = Directory(dir);
+        if (!await directory.exists()) continue;
+        await for (final entity in directory.list(followLinks: false)) {
+          if (entity is! File) continue;
+          if (!entity.path.endsWith('.litertlm') &&
+              !entity.path.endsWith('.bin')) {
+            continue;
+          }
+          found.putIfAbsent(
+            entity.path,
+            () => LocatedModel(entity.path, ModelProfile.forFileName(entity.path)),
+          );
+        }
+      } catch (e) {
+        // An unreadable directory is expected on scoped storage; keep looking.
+        print("Skipping $dir: $e");
+      }
+    }
+
+    // Sorted by profile priority, not by the order the filesystem happened to
+    // enumerate them. With both the stock model and the fine-tune present — the
+    // normal state during development — filesystem order would decide which one
+    // loads, and it is not stable across devices or installs.
+    final models = found.values.toList()
+      ..sort((a, b) => ModelProfile.all
+          .indexOf(a.profile)
+          .compareTo(ModelProfile.all.indexOf(b.profile)));
+    return List.unmodifiable(models);
+  }
+
+  /// Picks the model to load.
+  ///
+  /// [preferredProfileId] wins when a matching file is present, so the dev panel
+  /// can pin a choice. Otherwise the first model found is used.
+  Future<LocatedModel?> findLocalModelFile({String? preferredProfileId}) async {
+    final models = await findLocalModels();
+    if (models.isEmpty) return null;
+
+    if (preferredProfileId != null) {
+      for (final m in models) {
+        if (m.profile.id == preferredProfileId) return m;
+      }
+    }
+    return models.first;
   }
 
   Future<void> logToFile(String logMessage) async {
@@ -99,33 +138,38 @@ class LiteRtService {
   /// [systemInstruction] is passed to the runtime as a real system turn. Do not
   /// hand-write turn tags into prompts — the runtime applies the chat template
   /// stored in the model's own metadata.
+  ///
+  /// [initialMessages] seeds the conversation with exemplar turns. This is the
+  /// most effective lever on the companion's voice: the model is fine-tuned on
+  /// therapist dialogue, so showing it the register works better than
+  /// describing it in the system prompt. See [Persona.exemplars].
+  ///
+  /// [settings] carries both the sampler values and the [ModelProfile] they came
+  /// from; see [ModelSettings.load].
   Future<String?> initializeModel({
     required String path,
+    required ModelSettings settings,
     String? systemInstruction,
+    List<LiteLmMessage>? initialMessages,
     LiteLmBackend backend = LiteLmBackend.cpu,
-    double temperature = 0.7,
-    int topK = 40,
-    double topP = 0.95,
   }) {
     // Loading twice concurrently would double a footprint that is already at
     // the edge of what the device can hold, so callers share one attempt.
     return _pendingInit ??= _initializeModel(
       path: path,
+      settings: settings,
       systemInstruction: systemInstruction,
+      initialMessages: initialMessages,
       backend: backend,
-      temperature: temperature,
-      topK: topK,
-      topP: topP,
     ).whenComplete(() => _pendingInit = null);
   }
 
   Future<String?> _initializeModel({
     required String path,
+    required ModelSettings settings,
     String? systemInstruction,
+    List<LiteLmMessage>? initialMessages,
     required LiteLmBackend backend,
-    required double temperature,
-    required int topK,
-    required double topP,
   }) async {
     await logToFile("Starting initializeModel with path: $path");
     try {
@@ -147,18 +191,17 @@ class LiteRtService {
       ));
       await logToFile("Engine created on ${backend.name}. Creating conversation...");
 
-      _conversation = await _engine!.createConversation(
-        LiteLmConversationConfig(
-          systemInstruction: systemInstruction,
-          samplerConfig: LiteLmSamplerConfig(
-            topK: topK,
-            topP: topP,
-            temperature: temperature,
-          ),
-        ),
-      );
+      _systemInstruction = systemInstruction;
+      _initialMessages = initialMessages;
+      _settings = settings.copy();
 
-      await logToFile("Conversation ready on ${backend.name}.");
+      final seed = await _openConversation();
+
+      await logToFile("Conversation ready on ${backend.name} "
+          "with ${settings.profile.label} "
+          "($settings seed=$seed, "
+          "${initialMessages?.length ?? 0} exemplar turns, "
+          "systemInstruction=${systemInstruction?.length ?? 0} chars).");
       _isInitialized = true;
       _modelPath = path;
       _activeBackend = backend;
@@ -212,6 +255,106 @@ class LiteRtService {
     }).handleError((err, stack) {
       logToFile("Stream Error: $err\nStack: $stack");
     });
+  }
+
+  /// Disposes any current conversation and opens a new one with a fresh seed.
+  ///
+  /// [history] is appended to the persona exemplars, so passing the transcript
+  /// so far reconstructs an equivalent conversation. Returns the seed used, for
+  /// logging. Callers must have checked [_engine] is non-null.
+  Future<int> _openConversation({
+    List<LiteLmMessage> history = const [],
+    double temperatureMultiplier = 1.0,
+  }) async {
+    final base = _settings ?? ModelSettings();
+    final settings = temperatureMultiplier == 1.0
+        ? base
+        : (base.copy()
+          ..temperature = (base.temperature * temperatureMultiplier)
+              .clamp(0.1, ModelSettings.maxTemperature));
+    final seed = _nextSeed();
+
+    await _conversation?.dispose();
+    _conversation = await _engine!.createConversation(
+      LiteLmConversationConfig(
+        systemInstruction: _systemInstruction,
+        initialMessages: [...?_initialMessages, ...history],
+        samplerConfig: LiteLmSamplerConfig(
+          topK: settings.topK,
+          topP: settings.topP,
+          temperature: settings.temperature,
+          seed: seed,
+        ),
+      ),
+    );
+    return seed;
+  }
+
+  /// Rebuilds the conversation with new sampler settings.
+  ///
+  /// Sampler config is fixed at conversation creation, so changing it means a
+  /// new conversation — but the engine (and its mapped 2.5 GB of weights) is
+  /// kept, so this costs well under a second rather than a full reload.
+  ///
+  /// The conversation history is discarded, which is why the caller should warn
+  /// the user that the companion will lose the current thread.
+  Future<String?> reconfigure(ModelSettings settings) async {
+    if (!_isInitialized || _engine == null) {
+      return "Model is not initialized.";
+    }
+    try {
+      await logToFile("Reconfiguring sampler: $settings");
+      _settings = settings.copy();
+      await _openConversation();
+      return null;
+    } catch (e, stack) {
+      await logToFile("Reconfigure failed: $e\nStack: $stack");
+      _isInitialized = false;
+      _conversation = null;
+      return e.toString();
+    }
+  }
+
+  /// Rebuilds the conversation on a new seed, replaying [history].
+  ///
+  /// This is the escape hatch for the companion repeating itself. The native
+  /// [LiteLmConversation] exposes no way to change the sampler mid-conversation
+  /// — `javap` on litertlm-android confirms there is no setter and no per-call
+  /// override — so a different seed requires a different conversation, and the
+  /// transcript has to be replayed as initial messages.
+  ///
+  /// That replay means re-prefilling the whole history, which is why this is
+  /// called only when a repeat is actually detected rather than every turn.
+  /// Cost grows with transcript length; on a long conversation it is seconds,
+  /// not milliseconds.
+  ///
+  /// [temperatureMultiplier] widens sampling for the retry. A new seed alone is
+  /// not enough: a repeat is evidence the distribution is peaked, and on a peaked
+  /// distribution every seed picks the same token. Measured on-device — two
+  /// reseeds, two fresh seeds, byte-identical replies both times. The widening
+  /// stays in force until the next reseed or [reconfigure].
+  Future<String?> reseed({
+    List<LiteLmMessage> history = const [],
+    double temperatureMultiplier = ModelSettings.escapeTemperatureMultiplier,
+  }) async {
+    if (!_isInitialized || _engine == null) {
+      return "Model is not initialized.";
+    }
+    try {
+      final seed = await _openConversation(
+        history: history,
+        temperatureMultiplier: temperatureMultiplier,
+      );
+      await logToFile("Reseeded conversation (seed=$seed, "
+          "${history.length} replayed turns, "
+          "temp x$temperatureMultiplier).");
+      return null;
+    } catch (e, stack) {
+      await logToFile("Reseed failed: $e\nStack: $stack");
+      _isInitialized = false;
+      _conversation = null;
+      return e.toString();
+    }
   }
 
   /// Releases the conversation and engine. Context window first, graph second.

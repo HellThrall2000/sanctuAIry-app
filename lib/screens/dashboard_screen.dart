@@ -3,6 +3,7 @@ import '../models/journal_entry.dart';
 import '../main.dart';
 import 'chat_screen.dart';
 import 'journal_screen.dart';
+import 'memory_screen.dart';
 import 'soundscape_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -45,6 +46,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  void _openMemorySheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Theme.of(context).cardColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.85,
+        minChildSize: 0.5,
+        maxChildSize: 0.95,
+        expand: false,
+        builder: (context, scrollController) => const MemoryScreen(),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -81,6 +100,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
         ),
         actions: [
+          // Sits next to DIARY on purpose: what the companion remembers is as
+          // much the user's private data as the diary is, and should be no
+          // harder to reach.
+          TextButton.icon(
+            onPressed: _openMemorySheet,
+            icon: const Icon(Icons.psychology_outlined, size: 14),
+            label: const Text(
+              'MEMORY',
+              style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 1),
+            ),
+            style: TextButton.styleFrom(foregroundColor: primaryColor),
+          ),
           Padding(
             padding: const EdgeInsets.only(right: 8.0),
             child: TextButton.icon(
