@@ -24,8 +24,9 @@ class DatabaseService {
 
     return await openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: _onCreate,
+      onUpgrade: _onUpgrade,
     );
   }
 
@@ -39,6 +40,44 @@ class DatabaseService {
         allowAiAccess INTEGER
       )
     ''');
+    await _createMemoryTable(db);
+  }
+
+  /// v1 -> v2 adds the memory cache. Existing journals are untouched: this is a
+  /// user's private diary and a migration that drops it is unrecoverable.
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await _createMemoryTable(db);
+    }
+  }
+
+  /// Facts the companion knows about the user.
+  ///
+  /// `key` is the primary key rather than a surrogate id, so re-learning the
+  /// same slot replaces it. That is what keeps the profile self-correcting when
+  /// someone moves city or changes job — an append-only table would accumulate
+  /// contradictions and feed all of them to the model at once.
+  static Future<void> _createMemoryTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS memory_facts(
+        key TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        value TEXT NOT NULL,
+        text TEXT NOT NULL,
+        source TEXT NOT NULL,
+        sourceId TEXT,
+        evidence TEXT,
+        updatedAt TEXT NOT NULL
+      )
+    ''');
+    // The profile is read on every conversation start and rebuilt whenever a
+    // journal's permission is revoked; both order by recency.
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_memory_updated ON memory_facts(updatedAt DESC)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_memory_source ON memory_facts(source, sourceId)',
+    );
   }
 
   // Insert a new journal entry

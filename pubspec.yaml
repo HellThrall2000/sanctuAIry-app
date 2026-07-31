@@ -17,7 +17,12 @@ dependencies:
   just_audio: ^0.9.36
   crypto: ^3.0.3
   uuid: ^4.3.3
-  flutter_litert_lm: ^0.3.0
+  # Vendored fork of pub.dev flutter_litert_lm 0.3.0. Upstream never forwards
+  # the native SamplerConfig `seed` field, so every conversation sampled from
+  # seed 0 and the companion returned byte-identical replies. See
+  # packages/flutter_litert_lm/VENDOR.md for the full diff and how to rebase.
+  flutter_litert_lm:
+    path: packages/flutter_litert_lm
 
 dev_dependencies:
   flutter_test:

@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart';
 import 'dart:convert';
 import '../models/journal_entry.dart';
 import '../services/database_service.dart';
+import '../services/memory_store.dart';
 
 class JournalScreen extends StatefulWidget {
   final Function(List<JournalEntry>) onAllowedEntriesChanged;
@@ -17,6 +18,7 @@ class JournalScreen extends StatefulWidget {
 
 class _JournalScreenState extends State<JournalScreen> {
   final DatabaseService _dbService = DatabaseService();
+  final MemoryStore _memory = MemoryStore();
   final _uuid = const Uuid();
 
   bool _isUnlocked = false;
@@ -107,6 +109,9 @@ class _JournalScreenState extends State<JournalScreen> {
     );
 
     await _dbService.insertEntry(newEntry);
+    // Only extracts when the entry permits AI access; syncJournal enforces that
+    // rather than trusting each call site to check.
+    await _memory.syncJournal(newEntry);
     _titleController.clear();
     _contentController.clear();
     _loadEntries();
@@ -114,12 +119,18 @@ class _JournalScreenState extends State<JournalScreen> {
 
   Future<void> _deleteEntry(String id) async {
     await _dbService.deleteEntry(id);
+    // Deleting the entry must delete what was learned from it, or the companion
+    // would keep knowing something the user believes they erased.
+    await _memory.forgetSource(id);
     _loadEntries();
   }
 
   Future<void> _toggleAiAccess(JournalEntry entry) async {
     final updated = entry.copyWith(allowAiAccess: !entry.allowAiAccess);
     await _dbService.updateEntry(updated);
+    // Takes effect now, in both directions: granting access extracts facts,
+    // revoking it deletes them. Anything else would make the toggle a lie.
+    await _memory.syncJournal(updated);
     _loadEntries();
   }
 

@@ -20,6 +20,14 @@ supportive, therapist-like conversation rather than act as a general chatbot.
 - **Streaming chat UI** so first-token latency is visible rather than looking frozen.
 - **Ambient soundscapes** with local loopable audio.
 
+## Roadmap
+
+Active work is on `feat-memory-graph`: a personal memory graph that lets the companion
+learn about the user and lets the diary silently constrain its behaviour.
+
+- **[ROADMAP.md](ROADMAP.md)** — prioritised execution plan, P0 onward
+- **[docs/MEMORY_GRAPH_ARCHITECTURE.md](docs/MEMORY_GRAPH_ARCHITECTURE.md)** — technical design
+
 ## Architecture
 
 | Layer | Location |
