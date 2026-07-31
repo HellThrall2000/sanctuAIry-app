@@ -1,11 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'screens/dashboard_screen.dart';
+
+import 'screens/home_shell.dart';
+import 'theme/app_theme.dart';
+
+const _themePrefKey = 'sanctuary_theme_dark';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
-  final isDark = prefs.getBool('sanctuary_theme_dark') ?? false;
+  // Sunlit by default: the Organic system is authored as a light theme, and
+  // Dusk is the derived one.
+  final isDark = prefs.getBool(_themePrefKey) ?? false;
 
   runApp(SanctuaryApp(initialDark: isDark));
 }
@@ -13,8 +19,7 @@ void main() async {
 class SanctuaryApp extends StatefulWidget {
   final bool initialDark;
 
-  // The app will strictly use dark theme, but we keep the parameter for backwards compatibility.
-  const SanctuaryApp({Key? key, this.initialDark = true}) : super(key: key);
+  const SanctuaryApp({super.key, this.initialDark = false});
 
   @override
   State<SanctuaryApp> createState() => SanctuaryAppState();
@@ -34,57 +39,30 @@ class SanctuaryAppState extends State<SanctuaryApp> {
 
   bool get isDark => _isDark;
 
-  void toggleTheme() async {
-    setState(() {
-      _isDark = !_isDark;
-    });
+  /// Switches palette and remembers the choice.
+  ///
+  /// This used to write the preference and change nothing: `themeMode` was
+  /// hardcoded to `ThemeMode.dark` and both themes were identical, so the
+  /// drawer's toggle was a dead control. It is the "Sunlit / Dusk" segmented
+  /// control now, and it works.
+  Future<void> setDark(bool value) async {
+    if (value == _isDark) return;
+    setState(() => _isDark = value);
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('sanctuary_theme_dark', _isDark);
+    await prefs.setBool(_themePrefKey, value);
   }
+
+  void toggleTheme() => setDark(!_isDark);
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Sanctuary',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        scaffoldBackgroundColor: const Color(0xFF000000), // Deep black
-        primaryColor: const Color(0xFF00E5FF), // Cyan/Neon blue accent
-        cardColor: const Color(0xFF0A0A0A), // Dark gray for cards
-        textTheme: const TextTheme(
-          bodyLarge: TextStyle(color: Color(0xFFE2E6E9), fontFamily: 'Inter'),
-          bodyMedium: TextStyle(color: Color(0xFF878F96), fontFamily: 'Inter'),
-          titleLarge: TextStyle(color: Color(0xFF00E5FF), fontWeight: FontWeight.bold, fontFamily: 'Inter'),
-        ),
-        colorScheme: ColorScheme.fromSeed(
-          brightness: Brightness.dark,
-          seedColor: const Color(0xFF00E5FF),
-          background: const Color(0xFF000000),
-          surface: const Color(0xFF0A0A0A),
-        ),
-        useMaterial3: true,
-      ),
-      darkTheme: ThemeData(
-        brightness: Brightness.dark,
-        scaffoldBackgroundColor: const Color(0xFF000000), // Deep black
-        primaryColor: const Color(0xFF00E5FF), // Cyan/Neon blue accent
-        cardColor: const Color(0xFF0A0A0A), // Dark gray for cards
-        textTheme: const TextTheme(
-          bodyLarge: TextStyle(color: Color(0xFFE2E6E9), fontFamily: 'Inter'),
-          bodyMedium: TextStyle(color: Color(0xFF878F96), fontFamily: 'Inter'),
-          titleLarge: TextStyle(color: Color(0xFF00E5FF), fontWeight: FontWeight.bold, fontFamily: 'Inter'),
-        ),
-        colorScheme: ColorScheme.fromSeed(
-          brightness: Brightness.dark,
-          seedColor: const Color(0xFF00E5FF),
-          background: const Color(0xFF000000),
-          surface: const Color(0xFF0A0A0A),
-        ),
-        useMaterial3: true,
-      ),
-      themeMode: ThemeMode.dark, // Strictly dark-themed
-      home: const DashboardScreen(),
+      theme: AppTheme.sunlit(),
+      darkTheme: AppTheme.dusk(),
+      themeMode: _isDark ? ThemeMode.dark : ThemeMode.light,
+      home: HomeShell(isDark: _isDark, onThemeChanged: setDark),
     );
   }
 }
