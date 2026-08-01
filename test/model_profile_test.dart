@@ -71,6 +71,17 @@ void main() {
       );
     });
 
+    test('stock is told never to invent details about the user', () {
+      // Measured on device: asked for a fun fact, the companion volunteered
+      // "I heard your girlfriend is making that amazing lasagna again" — a
+      // girlfriend who had left years earlier, and a claim to have "heard"
+      // something in an app whose whole premise is that nothing reaches it from
+      // outside the device. Being funny gives a small model licence to invent,
+      // so the licence has to be withdrawn explicitly.
+      final instruction = Persona.instructionFor(ModelProfile.stock)!;
+      expect(instruction, contains('Never invent details about their life'));
+    });
+
     test('stock is told to sound like a friend, not a clinician', () {
       final instruction = Persona.instructionFor(ModelProfile.stock)!;
       expect(instruction, contains('friend'));
@@ -142,6 +153,26 @@ void main() {
         if (cue == null) continue;
         expect(cue.length, lessThan(90), reason: line);
       }
+    });
+  });
+
+  group('output repair is per model', () {
+    test('only the fine-tune needs its output repaired', () {
+      // ReplySanitizer exists for the fine-tune's corrupted corpus: `_comma_`
+      // escapes and mode collapse. Stock Gemma produces neither, and the loop
+      // detector re-scans the whole reply on every streamed chunk — so running
+      // it there is cost with no possible effect.
+      expect(ModelProfile.fineTune.repairsOutput, isTrue);
+      expect(ModelProfile.stock.repairsOutput, isFalse);
+    });
+
+    test('an unknown model still gets repaired', () {
+      // forFileName falls back to the fine-tune, which is the safe direction:
+      // repairing healthy output is cosmetic, showing raw _comma_ is not.
+      expect(
+        ModelProfile.forFileName('/sdcard/something-else.litertlm').repairsOutput,
+        isTrue,
+      );
     });
   });
 }

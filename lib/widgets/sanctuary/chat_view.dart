@@ -268,7 +268,7 @@ class _ChatViewState extends State<ChatView> {
     }
 
     setState(() {
-      _messages.addAll(stored);
+      _messages.addAll(_withDerivedDelivery(stored));
       _loadingHistory = false;
       // Restoring the transcript also restores what the model will be told it
       // said, so a reseed after resuming replays a real conversation.
@@ -319,6 +319,30 @@ class _ChatViewState extends State<ChatView> {
     return _modelTranscript.length <= limit
         ? List.of(_modelTranscript)
         : _modelTranscript.sublist(_modelTranscript.length - limit);
+  }
+
+  /// Restores tick state without storing it.
+  ///
+  /// A user turn is [MessageDelivery.read] if anything follows it, and
+  /// [MessageDelivery.sent] otherwise — which is exactly right for the one case
+  /// that matters: an app killed mid-generation comes back showing the last
+  /// message as never answered, because it never was.
+  static List<ChatMessage> _withDerivedDelivery(List<ChatMessage> stored) {
+    var answered = false;
+    final out = <ChatMessage>[];
+    // Backwards, so "is there anything after this" is a single pass.
+    for (final message in stored.reversed) {
+      if (message.isUser) {
+        out.add(message.copyWith(
+          delivery:
+              answered ? MessageDelivery.read : MessageDelivery.sent,
+        ));
+      } else {
+        answered = true;
+        out.add(message);
+      }
+    }
+    return out.reversed.toList(growable: false);
   }
 
   static List<LiteLmMessage> _transcriptFrom(List<ChatMessage> stored) {
@@ -429,6 +453,8 @@ class _ChatViewState extends State<ChatView> {
       text: prompt,
       createdAt: DateTime.now(),
       mood: mood,
+      // One grey tick until the model is actually awake.
+      delivery: MessageDelivery.sent,
     );
 
     setState(() {
@@ -448,6 +474,9 @@ class _ChatViewState extends State<ChatView> {
     // risk is actually assessed. See CrisisGuard for why this is two tiers.
     final level = CrisisGuard.assess(prompt);
     if (level == CrisisLevel.explicit) {
+      // Answered by the app rather than the model, but answered — the ticks
+      // describe whether a reply exists, not which part of the app wrote it.
+      _setDelivery(userMessage.id, MessageDelivery.read);
       await _emitSystem(CrisisGuard.response());
       setState(() => _isGenerating = false);
       return;
@@ -460,6 +489,7 @@ class _ChatViewState extends State<ChatView> {
     // LexicalGuard for where that line is drawn.
     final inputVerdict = _guard.screenInput(prompt);
     if (!inputVerdict.isAllowed) {
+      _setDelivery(userMessage.id, MessageDelivery.read);
       await _emitSystem(inputVerdict.replacement!);
       setState(() => _isGenerating = false);
       return;
@@ -499,15 +529,12 @@ class _ChatViewState extends State<ChatView> {
     }());
 
     if (!_liteRtService.isInitialized) {
-      // A transient banner, not part of the conversation, so it is not stored.
-      final status = _system(
-        'Waking the companion — mapping the model into memory. '
-        'This takes a few seconds the first time.',
-      );
-      final statusIndex = _messages.length;
-      setState(() => _messages.add(status));
-      _scrollToBottom();
-      await Future.delayed(const Duration(milliseconds: 150));
+      // No banner here. The single grey tick already says the message has been
+      // written down but not delivered, which is the whole of what a loading
+      // notice used to say — and it says it without putting a line of app
+      // housekeeping into the middle of someone's conversation. Only genuine
+      // failures below still speak up, because those need an explanation the
+      // ticks cannot give.
 
       // Which model is present decides the persona and the sampler, so the
       // profile has to be resolved before the instruction is built.
@@ -532,14 +559,12 @@ class _ChatViewState extends State<ChatView> {
               _modelTranscript.isEmpty ? Persona.exemplars() : _resumeHistory(),
         );
         if (!mounted) return;
-        setState(() => _messages.removeAt(statusIndex));
         if (error != null) {
           await _emitSystem('The companion could not start: $error');
           setState(() => _isGenerating = false);
           return;
         }
       } else {
-        setState(() => _messages.removeAt(statusIndex));
         await _emitSystem(
           'Companion offline — the model file is not on this device.',
         );
@@ -583,20 +608,12 @@ class _ChatViewState extends State<ChatView> {
       if (hint != null) hint,
     ].join('\n\n');
 
-    final streamingMessage = ChatMessage(
-      id: _newId(),
-      role: ChatRole.companion,
-      text: '',
-      createdAt: DateTime.now(),
-    );
-    setState(() => _messages.add(streamingMessage));
-    // Written before generation and updated as tokens arrive, so an app killed
-    // mid-reply keeps the partial answer instead of losing the exchange.
-    await _chatStore.append(streamingMessage);
+    // Two grey ticks: the companion has it and is composing.
+    _setDelivery(userMessage.id, MessageDelivery.processing);
 
     String reply;
     try {
-      reply = await _streamInto(fullPrompt, streamingMessage.id);
+      reply = await _generate(fullPrompt);
 
       // The sampler seed is fixed for the life of a conversation, so a reply
       // that has already been given will keep being given. Rebuilding on a
@@ -607,14 +624,13 @@ class _ChatViewState extends State<ChatView> {
       if (_isRepeat(reply)) {
         final err = await _liteRtService.reseed(history: _replayHistory());
         if (err == null && mounted) {
-          reply = await _streamInto(fullPrompt, streamingMessage.id);
+          reply = await _generate(fullPrompt);
         }
       }
     } catch (err) {
       if (!mounted) return;
-      _replaceLast(streamingMessage, 'Something went wrong during inference: $err');
+      await _emitSystem('Something went wrong during inference: $err');
       setState(() => _isGenerating = false);
-      _scrollToBottom();
       return;
     }
 
@@ -624,18 +640,43 @@ class _ChatViewState extends State<ChatView> {
     // instruction makes "I'm a real person" rare; only this makes it never
     // arrive. Offending sentences are removed rather than the whole reply
     // regenerated — regeneration costs another 15–30 s and may violate again.
+    //
+    // Cheaper than it used to be, too: the reply is no longer on screen while
+    // it is being written, so a rewritten sentence is never seen and then
+    // retracted.
     final outputVerdict = _guard.screenOutput(reply);
     if (!outputVerdict.isAllowed) {
       debugPrint('Guard rewrote a reply: ${outputVerdict.reason}');
       reply = outputVerdict.replacement!;
-      _replaceLast(streamingMessage, reply);
     }
+
+    // Blue: the reply exists. Only now does the companion appear to start
+    // typing — the order matters, because "read, then typing, then a message"
+    // is the sequence a person produces, and the old behaviour (typing dots
+    // appearing the instant you hit send, then a reply assembling itself word
+    // by word) is the sequence a machine produces.
+    _setDelivery(userMessage.id, MessageDelivery.read);
+    await _showTyping(reply);
+    if (!mounted) return;
+
+    final replyMessage = ChatMessage(
+      id: _newId(),
+      role: ChatRole.companion,
+      text: reply,
+      createdAt: DateTime.now(),
+    );
+    setState(() {
+      _messages
+        ..removeWhere((m) => m.id == _typingSlotId)
+        ..add(replyMessage);
+    });
+    _scrollToBottom();
+    await _chatStore.append(replyMessage);
 
     // The user's own words, not `fullPrompt`: the recalled-facts block is
     // scaffolding for one turn, and replaying it on a reseed would re-inject
     // facts chosen for a message that is no longer the current one.
     _remember(prompt, reply);
-    await _chatStore.updateText(streamingMessage.id, reply);
 
     // Index the completed exchange so it can be retrieved months from now, and
     // push the check-in timer out. Neither belongs in the reply path.
@@ -672,12 +713,46 @@ class _ChatViewState extends State<ChatView> {
     _scrollToBottom();
   }
 
-  /// Rewrites the slot [original] occupies, wherever it now sits.
-  void _replaceLast(ChatMessage original, String text) {
-    final index = _messages.indexWhere((m) => m.id == original.id);
+  /// Moves a user message's ticks on.
+  void _setDelivery(String id, MessageDelivery delivery) {
+    if (!mounted) return;
+    final index = _messages.indexWhere((m) => m.id == id);
     if (index < 0) return;
-    setState(() => _messages[index] = _messages[index].copyWith(text: text));
+    setState(() {
+      _messages[index] = _messages[index].copyWith(delivery: delivery);
+    });
   }
+
+  /// The id of the transient "…" bubble, if one is showing.
+  String? _typingSlotId;
+
+  /// Shows the typing indicator for a believable length of time.
+  ///
+  /// The reply is already complete when this runs — this is purely the pause
+  /// before it lands. Scaled by length, because a paragraph arriving as fast as
+  /// "yeah, same" is the tell that nobody is really there. Bounded at both
+  /// ends: under [_typingMin] it flickers, and past [_typingMax] the user is
+  /// being made to wait for a message that already exists.
+  Future<void> _showTyping(String reply) async {
+    final slot = ChatMessage(
+      id: _newId(),
+      role: ChatRole.companion,
+      text: '',
+      createdAt: DateTime.now(),
+      sentToModel: false,
+    );
+    _typingSlotId = slot.id;
+    if (!mounted) return;
+    setState(() => _messages.add(slot));
+    _scrollToBottom();
+
+    final ms = (_typingMin.inMilliseconds + reply.length * 11)
+        .clamp(_typingMin.inMilliseconds, _typingMax.inMilliseconds);
+    await Future.delayed(Duration(milliseconds: ms));
+  }
+
+  static const Duration _typingMin = Duration(milliseconds: 700);
+  static const Duration _typingMax = Duration(milliseconds: 2600);
 
   /// Streams one reply into the last message slot, completing with the raw text.
   ///
@@ -685,23 +760,25 @@ class _ChatViewState extends State<ChatView> {
   /// accumulated text, so `_comma_` artifacts never reach the screen. The raw
   /// text is what completes, because that is what the model actually said and
   /// what repeat detection and the replay transcript should be based on.
-  Future<String> _streamInto(String prompt, String slotId) {
+  Future<String> _generate(String prompt) {
     final completer = Completer<String>();
     final buffer = StringBuffer();
     StreamSubscription<String>? subscription;
 
-    bool paint({required bool streaming}) {
+    // Both of these exist only for the fine-tune's defects, so on stock they
+    // are skipped entirely rather than run to no effect. See
+    // ModelProfile.repairsOutput.
+    final repairs = _settings.profile.repairsOutput;
+
+    /// Reports whether the model has started looping.
+    ///
+    /// The expensive one: it re-scans the whole accumulated reply on every
+    /// chunk. Worth it on a model that mode-collapses and will otherwise repeat
+    /// one sentence to the token limit; pure waste on one that does not.
+    bool isLooping() {
+      if (!repairs) return false;
       final sanitized =
-          ReplySanitizer.cleanDetailed(buffer.toString(), streaming: streaming);
-      if (mounted) {
-        final index = _messages.indexWhere((m) => m.id == slotId);
-        if (index >= 0) {
-          setState(() {
-            _messages[index] = _messages[index].copyWith(text: sanitized.text);
-          });
-        }
-        _scrollToBottom();
-      }
+          ReplySanitizer.cleanDetailed(buffer.toString(), streaming: true);
       return sanitized.droppedSentences >= _loopTolerance;
     }
 
@@ -710,11 +787,12 @@ class _ChatViewState extends State<ChatView> {
         buffer.write(chunk);
         // Once it is repeating there is nothing left to wait for — it will run
         // to the token limit saying the same thing. Cutting it short saves the
-        // user staring at a spinner for the rest of the generation.
-        if (paint(streaming: true)) {
+        // user waiting out the rest of a generation that has nothing to add.
+        if (isLooping()) {
           subscription?.cancel();
-          paint(streaming: false);
-          if (!completer.isCompleted) completer.complete(buffer.toString());
+          if (!completer.isCompleted) {
+            completer.complete(_finish(buffer, repairs: repairs));
+          }
         }
       },
       onError: (err) {
@@ -722,7 +800,6 @@ class _ChatViewState extends State<ChatView> {
         if (!completer.isCompleted) completer.completeError(err);
       },
       onDone: () {
-        paint(streaming: false);
         subscription?.cancel();
         if (!completer.isCompleted) completer.complete(buffer.toString());
       },
@@ -730,6 +807,28 @@ class _ChatViewState extends State<ChatView> {
     );
 
     return completer.future;
+  }
+
+  /// The finished reply.
+  ///
+  /// With [repairs], escapes are decoded and degenerate repeats dropped —
+  /// applied once here rather than on every painted frame. That also closes a
+  /// bug the streaming version had: the screen showed sanitized text while
+  /// `ChatStore` was written the *raw* string, so `_comma_` artifacts that were
+  /// never displayed reappeared when the conversation was restored.
+  ///
+  /// Without it, the model's own words go through untouched. `_comma_` is an
+  /// artifact of the fine-tune's training corpus and stock Gemma cannot produce
+  /// it, so there is nothing here to repair — and rewriting a healthy model's
+  /// output is a way to introduce faults, not remove them.
+  ///
+  /// Note this is *not* a relaxation of the guardrails: `LexicalGuard` screens
+  /// every reply regardless of profile, and that is the layer that enforces
+  /// boundaries.
+  static String _finish(StringBuffer buffer, {required bool repairs}) {
+    final raw = buffer.toString();
+    if (!repairs) return raw.trim();
+    return ReplySanitizer.cleanDetailed(raw, streaming: false).text;
   }
 
   /// Whether the companion has just said this, or opened this way, recently.
@@ -949,12 +1048,26 @@ class _ChatViewState extends State<ChatView> {
               color: isUser ? t.userBubbleBg : t.assistantBubbleBg,
               borderRadius: BorderRadius.circular(s.bubbleRadius),
             ),
-            child: SelectableText(
-              msg.text,
-              style: OrganicText.bubble(
-                isUser ? t.userBubbleFg : t.assistantBubbleFg,
-                size: s.bubbleFontSize,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SelectableText(
+                  msg.text,
+                  style: OrganicText.bubble(
+                    isUser ? t.userBubbleFg : t.assistantBubbleFg,
+                    size: s.bubbleFontSize,
+                  ),
+                ),
+                if (isUser) ...[
+                  const SizedBox(height: 3),
+                  _DeliveryTicks(
+                    delivery: msg.delivery,
+                    pending: t.userBubbleFg.withValues(alpha: 0.55),
+                    size: s.bubbleFontSize,
+                  ),
+                ],
+              ],
             ),
           ),
         ),
@@ -1069,6 +1182,44 @@ class _ChatViewState extends State<ChatView> {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Delivery ticks on a user's own bubble.
+///
+/// One grey tick while the model is still loading, two once it is composing,
+/// two blue once the reply exists. Drawn with Material's `done` / `done_all`
+/// rather than a custom glyph — the shape is the part people recognise, and it
+/// is one they have read a thousand times without being taught.
+class _DeliveryTicks extends StatelessWidget {
+  final MessageDelivery delivery;
+
+  /// Colour before the reply exists — the bubble's own foreground, faded, so
+  /// the ticks stay quiet until they have something to say.
+  final Color pending;
+
+  final double size;
+
+  const _DeliveryTicks({
+    required this.delivery,
+    required this.pending,
+    required this.size,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final read = delivery == MessageDelivery.read;
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 220),
+      child: Icon(
+        delivery == MessageDelivery.sent ? Icons.done : Icons.done_all,
+        // Keyed so the switcher animates between states rather than treating
+        // a recoloured icon as the same widget.
+        key: ValueKey(delivery),
+        size: size,
+        color: read ? Organic.tickRead : pending,
       ),
     );
   }

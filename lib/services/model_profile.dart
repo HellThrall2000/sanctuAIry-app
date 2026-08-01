@@ -38,6 +38,20 @@ class ModelProfile {
   /// [Persona.instructionFor].
   final String? lengthGuidance;
 
+  /// Whether this model's output needs repairing before it can be shown.
+  ///
+  /// True only for the fine-tune. `ReplySanitizer` exists entirely for its
+  /// defects: `_comma_` escapes baked into a corrupted training corpus
+  /// (ROADMAP P0.8), and mode collapse into one sentence repeated to the token
+  /// limit. Stock Gemma 4 E2B produces neither, so running any of it there is
+  /// work with no possible effect — the loop detector alone re-scans the entire
+  /// accumulated reply on every streamed chunk.
+  ///
+  /// A flag rather than a deletion because both models ship: the fine-tune is
+  /// still selectable, still on test devices, and would show raw `_comma_` to
+  /// the user the moment the repair went away.
+  final bool repairsOutput;
+
   final double temperature;
   final int topK;
   final double topP;
@@ -48,6 +62,7 @@ class ModelProfile {
     required this.fileNamePatterns,
     required this.personaMode,
     required this.lengthGuidance,
+    required this.repairsOutput,
     required this.temperature,
     required this.topK,
     required this.topP,
@@ -76,6 +91,7 @@ class ModelProfile {
     lengthGuidance:
         'Keep it short, the length of a text message — often one or two '
         'sentences, four at the very most. Never use headings or bullet lists.',
+    repairsOutput: false,
     temperature: 1.0,
     topK: 64,
     topP: 0.95,
@@ -95,6 +111,7 @@ class ModelProfile {
     fileNamePatterns: ['model_fixed', 'sanctuary', 'model'],
     personaMode: PersonaMode.safetyOnly,
     lengthGuidance: null,
+    repairsOutput: true,
     temperature: 1.2,
     topK: 64,
     topP: 1.0,
