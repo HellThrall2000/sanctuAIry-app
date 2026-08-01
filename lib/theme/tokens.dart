@@ -51,6 +51,15 @@ abstract final class Organic {
   /// Logout / destructive. The one literal in the prototype outside the ramps.
   static const danger = Color(0xFFA13A2E);
 
+  /// The blue of a read receipt.
+  ///
+  /// Deliberately outside both accent ramps and the only cool colour in the
+  /// Sunlit palette. That is the point: the tick has to read as *the* read
+  /// signal at a glance, and people already know this colour means it. Rendered
+  /// in sage or terracotta it would just look like more chrome. Desaturated
+  /// from the familiar messenger blue so it sits on warm sand without shouting.
+  static const tickRead = Color(0xFF4F9BC9);
+
   // --- Spacing (`--space-*`) --------------------------------------------
   //
   // A 4px grid multiplied by the system's 1.1 density, which is why these are

@@ -16,6 +16,26 @@ enum ChatRole {
       ChatRole.values.firstWhere((r) => r.name == name, orElse: () => system);
 }
 
+/// How far a user's message has got, shown as ticks on their own bubbles.
+///
+/// Borrowed from messaging apps because the wait here is long — the model takes
+/// 15–30 s, and before this the screen gave no sign of whether anything was
+/// happening. The three states are the three real stages, not decoration.
+///
+/// Not persisted. It is derived on restore from whether a reply follows, which
+/// is always correct and costs no migration.
+enum MessageDelivery {
+  /// Written down, but the companion is not awake yet — the model is still
+  /// being mapped into memory. One grey tick.
+  sent,
+
+  /// The companion has the message and is composing a reply. Two grey ticks.
+  processing,
+
+  /// A reply exists. Two blue ticks.
+  read,
+}
+
 /// One line of the conversation, as stored.
 ///
 /// Persisted in `chat_messages` and never deleted except by explicit user
@@ -38,6 +58,9 @@ class ChatMessage {
   /// would teach the companion to imitate the app's own voice.
   final bool sentToModel;
 
+  /// Only meaningful on [ChatRole.user] messages.
+  final MessageDelivery delivery;
+
   const ChatMessage({
     required this.id,
     required this.role,
@@ -45,17 +68,24 @@ class ChatMessage {
     required this.createdAt,
     this.mood,
     this.sentToModel = true,
+    this.delivery = MessageDelivery.read,
   });
 
   bool get isUser => role == ChatRole.user;
 
-  ChatMessage copyWith({String? text, MoodReading? mood}) => ChatMessage(
+  ChatMessage copyWith({
+    String? text,
+    MoodReading? mood,
+    MessageDelivery? delivery,
+  }) =>
+      ChatMessage(
         id: id,
         role: role,
         text: text ?? this.text,
         createdAt: createdAt,
         mood: mood ?? this.mood,
         sentToModel: sentToModel,
+        delivery: delivery ?? this.delivery,
       );
 
   Map<String, Object?> toMap() => {
