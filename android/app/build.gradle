@@ -30,6 +30,11 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+        // Required by flutter_local_notifications 22.x, which uses java.time on
+        // a minSdk of 24. Without it the build fails outright with
+        // "Dependency ':flutter_local_notifications' requires core library
+        // desugaring to be enabled".
+        coreLibraryDesugaringEnabled true
     }
 
     kotlinOptions {
@@ -58,6 +63,9 @@ android {
 }
 
 dependencies {
+    // Backports java.time for minSdk 24 — see coreLibraryDesugaringEnabled above.
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
+
     // flutter_litert_lm 0.3.0 pins litertlm-android:0.10.0, built from upstream
     // 2026-04-11 — that runtime predates Gemma 4 and aborts inside
     // nativeCreateEngine on a model whose LlmMetadata declares

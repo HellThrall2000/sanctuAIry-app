@@ -1,6 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanctuary/services/model_profile.dart';
+import 'package:sanctuary/models/sentiment.dart';
 import 'package:sanctuary/services/persona.dart';
+import 'package:sanctuary/services/sentiment_analyzer.dart';
 
 void main() {
   group('ModelProfile.forFileName', () {
@@ -48,8 +50,44 @@ void main() {
     test('stock gets the full persona, capped in length', () {
       final instruction = Persona.instructionFor(ModelProfile.stock)!;
       expect(instruction, contains('Sanctuary'));
-      expect(instruction, contains('3 to 5 sentences'));
+      // Asserted as behaviour rather than as an exact phrase: the cap is a
+      // register ("the length of a text message"), and pinning the wording made
+      // this test fail on a copy edit that changed nothing functional.
+      expect(instruction, contains(ModelProfile.stock.lengthGuidance!));
       expect(instruction, contains('Never diagnose'));
+    });
+
+    test('the persona never tells the model to ask a question', () {
+      // The regression this is here for. The persona used to say "Ask at most
+      // one question, and only when it genuinely helps" — meant as a ceiling,
+      // read as an instruction, and the companion ended every single reply with
+      // an interrogation. A permitted action stated in a system prompt becomes
+      // a quota, so the rule has to be phrased as a prohibition.
+      final instruction = Persona.instructionFor(ModelProfile.stock)!;
+      expect(instruction, contains('Do not end your replies with a question'));
+      expect(
+        instruction.toLowerCase(),
+        isNot(contains('ask at most one question')),
+      );
+    });
+
+    test('stock is told to sound like a friend, not a clinician', () {
+      final instruction = Persona.instructionFor(ModelProfile.stock)!;
+      expect(instruction, contains('friend'));
+      expect(instruction, contains('never talk like a clinician'));
+    });
+
+    test('friendliness never displaces the boundary rules', () {
+      // Warmth is a matter of manner; "never claim to be human" is a matter of
+      // identity. Making the companion friendlier must not quietly relax it —
+      // and every profile, however thin its persona, still carries it.
+      for (final profile in ModelProfile.all) {
+        final instruction = Persona.instructionFor(profile);
+        expect(instruction, isNotNull, reason: profile.id);
+        expect(instruction, contains('never claim to be human'),
+            reason: profile.id);
+        expect(instruction, contains('Never diagnose'), reason: profile.id);
+      }
     });
 
     test('the fine-tune gets safety text only, with no length quota', () {
@@ -72,6 +110,38 @@ void main() {
     test('profile ids are unique — they namespace saved settings', () {
       final ids = ModelProfile.all.map((p) => p.id).toSet();
       expect(ids.length, ModelProfile.all.length);
+    });
+  });
+
+  group('mood cue', () {
+    test('says nothing when nothing is signalled', () {
+      // Most turns. A cue on every message is meta-text competing with the
+      // user's own words, which is why repetitionHint is disabled.
+      expect(Persona.moodCue(MoodReading.neutral), isNull);
+      expect(Persona.moodCue(SentimentAnalyzer.read('ok')), isNull);
+      expect(Persona.moodCue(SentimentAnalyzer.read('what time is it')), isNull);
+    });
+
+    test('tells the model not to brighten when they are low', () {
+      // The regression: the companion celebrated a job offer one message after
+      // the user said they had not got it and felt like a failure.
+      final mood = SentimentAnalyzer.read(
+        'i didnt get it. i feel like such a failure',
+      );
+      final cue = Persona.moodCue(mood)!;
+      expect(cue, contains('do not brighten or celebrate'));
+    });
+
+    test('stays short enough not to swamp a brief message', () {
+      for (final line in [
+        'i feel hopeless',
+        'i am panicking',
+        'i got the promotion',
+      ]) {
+        final cue = Persona.moodCue(SentimentAnalyzer.read(line));
+        if (cue == null) continue;
+        expect(cue.length, lessThan(90), reason: line);
+      }
     });
   });
 }

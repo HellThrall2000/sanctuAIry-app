@@ -7,6 +7,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../models/journal_entry.dart';
 import '../../services/database_service.dart';
+import '../../services/chunk_store.dart';
 import '../../services/memory_store.dart';
 import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
@@ -37,6 +38,7 @@ class _DiaryPanelState extends State<DiaryPanel> {
 
   final DatabaseService _db = DatabaseService();
   final MemoryStore _memory = MemoryStore();
+  final ChunkStore _chunks = ChunkStore.instance;
   final _uuid = const Uuid();
   final TextEditingController _passcodeController = TextEditingController();
 
@@ -118,6 +120,9 @@ class _DiaryPanelState extends State<DiaryPanel> {
     // Takes effect now, in both directions: granting access extracts facts,
     // revoking it deletes them. Anything else would make the toggle a lie.
     await _memory.syncJournal(updated);
+    // Facts and chunks are separate stores with the same permission rule, so
+    // both have to be told. Revoking access must erase what either derived.
+    await _chunks.syncJournal(updated);
     await _loadEntries();
   }
 
@@ -126,6 +131,7 @@ class _DiaryPanelState extends State<DiaryPanel> {
     // Deleting the entry must delete what was learned from it, or the companion
     // would keep knowing something the user believes they erased.
     await _memory.forgetSource(entry.id);
+    await _chunks.removeSource(entry.id);
     await _loadEntries();
   }
 
@@ -209,6 +215,7 @@ class _DiaryPanelState extends State<DiaryPanel> {
     // Only extracts when the entry permits AI access; syncJournal enforces that
     // rather than trusting each call site to check.
     await _memory.syncJournal(entry);
+    await _chunks.syncJournal(entry);
     await _loadEntries();
   }
 
