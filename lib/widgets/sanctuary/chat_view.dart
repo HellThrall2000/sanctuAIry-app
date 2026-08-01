@@ -5,31 +5,29 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_litert_lm/flutter_litert_lm.dart';
 
+import '../../models/chat_message.dart';
 import '../../models/journal_entry.dart';
 import '../../models/memory_fact.dart';
+import '../../models/sentiment.dart';
+import '../../services/chat_store.dart';
+import '../../services/chunk_store.dart';
 import '../../services/crisis_guard.dart';
+import '../../services/event_store.dart';
+import '../../services/guard.dart';
 import '../../services/litert_service.dart';
 import '../../services/memory_store.dart';
 import '../../services/model_preference.dart';
 import '../../services/model_settings.dart';
+import '../../services/nudge_service.dart';
 import '../../services/persona.dart';
+import '../../services/relationship_log.dart';
 import '../../services/reply_sanitizer.dart';
+import '../../services/sentiment_analyzer.dart';
+import '../../services/topic_extractor.dart';
 import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
 import '../dev_settings_sheet.dart';
 import '../organic/organic.dart';
-
-class ChatMessage {
-  final String text;
-  final bool isUser;
-  final DateTime timestamp;
-
-  ChatMessage({
-    required this.text,
-    required this.isUser,
-    required this.timestamp,
-  });
-}
 
 /// The measurements that differ between the two shells.
 ///
@@ -191,23 +189,163 @@ class _ChatViewState extends State<ChatView> {
   /// file is located and its profile is known.
   ModelSettings _settings = ModelSettings();
 
+  final ChatStore _chatStore = ChatStore.instance;
+  final ChunkStore _chunks = ChunkStore.instance;
+  final EventStore _events = EventStore.instance;
+  final RelationshipLog _relationship = RelationshipLog.instance;
+  final NudgeService _nudges = NudgeService.instance;
+
+  /// Screens the user's message in and the model's reply out. See [Guard] for
+  /// why this is deterministic rather than a second classifier model.
+  static const Guard _guard = LexicalGuard();
+
+  /// The relationship block, read once alongside [_profileBlock].
+  String? _relationshipBlock;
+
+  /// How many past exchanges to prefill the model with when resuming.
+  ///
+  /// The screen shows the whole history; the model cannot. At 4096 tokens the
+  /// context also has to hold the persona, the profile, the relationship block
+  /// and room to generate, so continuity is bought with a short window plus
+  /// retrieval over everything older — which is the entire reason `ChunkStore`
+  /// exists.
+  static const int _resumeExchanges = 6;
+
+  bool _loadingHistory = true;
+
   @override
   void initState() {
     super.initState();
-    _messages.add(ChatMessage(
-      text: 'Welcome to your private Sanctuary. Here, your thoughts can '
-          'unfold freely — everything we discuss stays only on this device.',
-      isUser: false,
-      timestamp: DateTime.now(),
-    ));
+    _chatStore.cleared.addListener(_onCleared);
+    _restore();
   }
 
   @override
   void dispose() {
+    _chatStore.cleared.removeListener(_onCleared);
     _textController.dispose();
     _scrollController.dispose();
     super.dispose();
   }
+
+  /// Settings erased the transcript. Drop everything the conversation was
+  /// built on, including the model's own history — leaving that behind would
+  /// let the companion answer from a conversation the user can no longer see.
+  void _onCleared() {
+    if (!mounted) return;
+    setState(() {
+      _messages.clear();
+      _modelTranscript.clear();
+      _recentOpeners.clear();
+      _recentReplies.clear();
+    });
+  }
+
+  /// Loads the conversation from disk and, if the user has been away, lets the
+  /// companion open with something.
+  Future<void> _restore() async {
+    final stored = await _chatStore.recent();
+    if (!mounted) return;
+
+    if (stored.isEmpty) {
+      // First run. The welcome line is stored like any other turn so it is
+      // still there on the second launch rather than being re-announced.
+      final welcome = _system(
+        'Welcome to your private Sanctuary. Here, your thoughts can unfold '
+        'freely — everything we discuss stays only on this device.',
+      );
+      await _chatStore.append(welcome);
+      await _relationship.recordMilestoneOnce(
+        MilestoneKind.firstConversation,
+        'The first time they opened Sanctuary.',
+      );
+      if (!mounted) return;
+      setState(() {
+        _messages.add(welcome);
+        _loadingHistory = false;
+      });
+      return;
+    }
+
+    setState(() {
+      _messages.addAll(stored);
+      _loadingHistory = false;
+      // Restoring the transcript also restores what the model will be told it
+      // said, so a reseed after resuming replays a real conversation.
+      _modelTranscript.addAll(_transcriptFrom(stored));
+    });
+    _scrollToBottom();
+
+    await _deliverPendingNudge();
+  }
+
+  /// Shows a check-in if the user has been away long enough to warrant one.
+  ///
+  /// Runs on open regardless of whether they arrived via the notification, so
+  /// the app and the notification shade never disagree about whether the
+  /// companion reached out.
+  Future<void> _deliverPendingNudge() async {
+    await _nudges.load();
+    final nudge = await _nudges.pendingNudge();
+    if (nudge == null || !mounted) return;
+
+    final message = _system(nudge.text);
+    await _chatStore.append(message);
+    await _nudges.markDelivered(nudge);
+    if (nudge.about != null) {
+      await _relationship.recordMilestone(
+        MilestoneKind.returnedAfterAbsence,
+        'Asked how ${nudge.about!.text} went.',
+      );
+    }
+    if (!mounted) return;
+    setState(() => _messages.add(message));
+    _scrollToBottom();
+  }
+
+  /// The turns the model is allowed to believe it took part in.
+  ///
+  /// Only [ChatMessage.sentToModel] turns, and only the last
+  /// [_resumeExchanges] of them. System text — banners, guard replies, nudges —
+  /// is on screen but was never generated, and replaying it as model history
+  /// would teach the companion to imitate the app's own voice.
+  /// The restored transcript, trimmed to the resume window.
+  ///
+  /// [_modelTranscript] holds everything restored so that repeat detection and
+  /// [_replayHistory] see the whole picture; only this much is actually
+  /// prefilled into the engine.
+  List<LiteLmMessage> _resumeHistory() {
+    const limit = _resumeExchanges * 2;
+    return _modelTranscript.length <= limit
+        ? List.of(_modelTranscript)
+        : _modelTranscript.sublist(_modelTranscript.length - limit);
+  }
+
+  static List<LiteLmMessage> _transcriptFrom(List<ChatMessage> stored) {
+    final usable = stored
+        .where((m) => m.sentToModel && m.role != ChatRole.system)
+        .toList();
+    final window = usable.length <= _resumeExchanges * 2
+        ? usable
+        : usable.sublist(usable.length - _resumeExchanges * 2);
+    return [
+      for (final m in window)
+        m.isUser ? LiteLmMessage.user(m.text) : LiteLmMessage.model(m.text),
+    ];
+  }
+
+  ChatMessage _system(String text) => ChatMessage(
+        id: _newId(),
+        role: ChatRole.system,
+        text: text,
+        createdAt: DateTime.now(),
+        sentToModel: false,
+      );
+
+  static String _newId() =>
+      '${DateTime.now().microsecondsSinceEpoch}-${_counter++}';
+
+  static int _counter = 0;
 
   /// Persona plus any journals the user unlocked for this session.
   ///
@@ -223,7 +361,8 @@ class _ChatViewState extends State<ChatView> {
     final persona = Persona.instructionFor(_settings.profile);
     if (persona == null &&
         widget.allowedJournals.isEmpty &&
-        _profileBlock == null) {
+        _profileBlock == null &&
+        _relationshipBlock == null) {
       return null;
     }
 
@@ -233,6 +372,16 @@ class _ChatViewState extends State<ChatView> {
       buffer.writeln();
       buffer.writeln();
       buffer.writeln(_profileBlock);
+    }
+
+    // How the relationship has been going, as distinct from what is known
+    // about the user. Fixed for the life of the conversation, like everything
+    // else here — see RelationshipLog.promptBlock for why it is phrased as
+    // observation rather than as instruction.
+    if (_relationshipBlock != null) {
+      buffer.writeln();
+      buffer.writeln();
+      buffer.writeln(_relationshipBlock);
     }
 
     if (widget.allowedJournals.isNotEmpty) {
@@ -263,18 +412,31 @@ class _ChatViewState extends State<ChatView> {
 
   void _sendMessage() async {
     final prompt = _textController.text.trim();
-    if (prompt.isEmpty || _isGenerating) return;
+    // Blocked until the transcript is restored: sending first would append a
+    // turn ahead of history that is still loading, and the conversation would
+    // come back in the wrong order on the next launch.
+    if (prompt.isEmpty || _isGenerating || _loadingHistory) return;
 
     _textController.clear();
+
+    // Read the emotional register before anything else touches the message.
+    // Cheap enough to be unconditional — see SentimentAnalyzer for why this is
+    // lexical rather than a second inference pass.
+    final mood = SentimentAnalyzer.read(prompt);
+    final userMessage = ChatMessage(
+      id: _newId(),
+      role: ChatRole.user,
+      text: prompt,
+      createdAt: DateTime.now(),
+      mood: mood,
+    );
+
     setState(() {
-      _messages.add(ChatMessage(
-        text: prompt,
-        isUser: true,
-        timestamp: DateTime.now(),
-      ));
+      _messages.add(userMessage);
       _isGenerating = true;
     });
     _scrollToBottom();
+    await _chatStore.append(userMessage);
     await Future.delayed(const Duration(milliseconds: 150));
 
     // Only an *unambiguous* statement of intent short-circuits: no model, no
@@ -286,18 +448,22 @@ class _ChatViewState extends State<ChatView> {
     // risk is actually assessed. See CrisisGuard for why this is two tiers.
     final level = CrisisGuard.assess(prompt);
     if (level == CrisisLevel.explicit) {
-      setState(() {
-        _messages.add(ChatMessage(
-          text: CrisisGuard.response(),
-          isUser: false,
-          timestamp: DateTime.now(),
-        ));
-        _isGenerating = false;
-      });
-      _scrollToBottom();
+      await _emitSystem(CrisisGuard.response());
+      setState(() => _isGenerating = false);
       return;
     }
     if (level == CrisisLevel.concern) _concernTurns++;
+
+    // Everything CrisisGuard does not own: sexual content and abuse aimed at
+    // the companion. Narrow on purpose — someone arriving angry is usually
+    // distressed, and a companion that refuses them has failed at its job. See
+    // LexicalGuard for where that line is drawn.
+    final inputVerdict = _guard.screenInput(prompt);
+    if (!inputVerdict.isAllowed) {
+      await _emitSystem(inputVerdict.replacement!);
+      setState(() => _isGenerating = false);
+      return;
+    }
 
     // Learn from what the user just said. Deterministic and instant, so it
     // costs nothing on the turn — see FactExtractor for why this is not a model
@@ -308,16 +474,38 @@ class _ChatViewState extends State<ChatView> {
       return <MemoryFact>[];
     }));
 
+    // The relationship log, and anything the user said is coming up. Both feed
+    // later turns and later check-ins rather than this reply, so neither is
+    // awaited into the response path.
+    unawaited(() async {
+      try {
+        await _relationship.recordMood(mood);
+        await _relationship.noteTopics(TopicExtractor.extract(prompt));
+        await _events.learnFrom(prompt);
+        if (mood.label == MoodLabel.distressed) {
+          await _relationship.recordMilestone(
+            MilestoneKind.hardNight,
+            'A conversation that started in real distress.',
+          );
+        } else if (mood.label == MoodLabel.bright) {
+          await _relationship.recordMilestone(
+            MilestoneKind.goodNews,
+            'They came with something good.',
+          );
+        }
+      } catch (e) {
+        debugPrint('Relationship write failed: $e');
+      }
+    }());
+
     if (!_liteRtService.isInitialized) {
-      final statusMessageIndex = _messages.length;
-      setState(() {
-        _messages.add(ChatMessage(
-          text: 'Waking the companion — mapping the model into memory. '
-              'This takes a few seconds the first time.',
-          isUser: false,
-          timestamp: DateTime.now(),
-        ));
-      });
+      // A transient banner, not part of the conversation, so it is not stored.
+      final status = _system(
+        'Waking the companion — mapping the model into memory. '
+        'This takes a few seconds the first time.',
+      );
+      final statusIndex = _messages.length;
+      setState(() => _messages.add(status));
       _scrollToBottom();
       await Future.delayed(const Duration(milliseconds: 150));
 
@@ -328,39 +516,34 @@ class _ChatViewState extends State<ChatView> {
       );
       if (located != null) {
         _settings = await ModelSettings.load(located.profile);
-        // Loaded before the instruction is built — this is the whole point of
-        // the cache, that a new session starts already knowing the user.
+        // Both loaded before the instruction is built — this is the whole point
+        // of the cache, that a new session starts already knowing the user and
+        // already knowing how the two of them have been.
         _profileBlock = await _memory.profileBlock();
+        _relationshipBlock = await _relationship.promptBlock();
         final error = await _liteRtService.initializeModel(
           path: located.path,
           settings: _settings,
           systemInstruction: _buildSystemInstruction(),
-          initialMessages: Persona.exemplars(),
+          // Resume where the conversation left off. Exemplars only seed a
+          // conversation that has no history of its own to learn the register
+          // from — real history is always the better demonstration.
+          initialMessages:
+              _modelTranscript.isEmpty ? Persona.exemplars() : _resumeHistory(),
         );
         if (!mounted) return;
+        setState(() => _messages.removeAt(statusIndex));
         if (error != null) {
-          setState(() {
-            _messages[statusMessageIndex] = ChatMessage(
-              text: 'The companion could not start: $error',
-              isUser: false,
-              timestamp: DateTime.now(),
-            );
-            _isGenerating = false;
-          });
-          _scrollToBottom();
+          await _emitSystem('The companion could not start: $error');
+          setState(() => _isGenerating = false);
           return;
         }
-        setState(() => _messages.removeAt(statusMessageIndex));
       } else {
-        setState(() {
-          _messages[statusMessageIndex] = ChatMessage(
-            text: 'Companion offline — the model file is not on this device.',
-            isUser: false,
-            timestamp: DateTime.now(),
-          );
-          _isGenerating = false;
-        });
-        _scrollToBottom();
+        setState(() => _messages.removeAt(statusIndex));
+        await _emitSystem(
+          'Companion offline — the model file is not on this device.',
+        );
+        setState(() => _isGenerating = false);
         return;
       }
     }
@@ -379,20 +562,41 @@ class _ChatViewState extends State<ChatView> {
     final recall =
         await _memory.recallBlock(prompt).catchError((Object e) => null);
 
+    // Past conversations that bear on this message. Separate from `recall`
+    // above: that returns slot-keyed facts ("they are allergic to peanuts"),
+    // this returns what was actually said months ago. Usually null — most
+    // turns should retrieve nothing, or the prompt fills with irrelevance.
+    final episodic =
+        await _chunks.recallBlock(prompt).catchError((Object e) => null);
+
     final hint = Persona.repetitionHint(_recentOpeners);
+    // How they sound *in this message*, placed immediately before it. The
+    // system instruction is fixed for the conversation and cannot track a turn
+    // where the news reverses — which is exactly how the companion came to
+    // celebrate a job offer the user had just said they did not get.
+    final cue = Persona.moodCue(mood);
     final fullPrompt = [
+      if (episodic != null) episodic,
       if (recall != null) recall,
+      if (cue != null) cue,
       prompt,
       if (hint != null) hint,
     ].join('\n\n');
 
-    final streamingMessage =
-        ChatMessage(text: '', isUser: false, timestamp: DateTime.now());
+    final streamingMessage = ChatMessage(
+      id: _newId(),
+      role: ChatRole.companion,
+      text: '',
+      createdAt: DateTime.now(),
+    );
     setState(() => _messages.add(streamingMessage));
+    // Written before generation and updated as tokens arrive, so an app killed
+    // mid-reply keeps the partial answer instead of losing the exchange.
+    await _chatStore.append(streamingMessage);
 
     String reply;
     try {
-      reply = await _streamInto(fullPrompt, streamingMessage.timestamp);
+      reply = await _streamInto(fullPrompt, streamingMessage.id);
 
       // The sampler seed is fixed for the life of a conversation, so a reply
       // that has already been given will keep being given. Rebuilding on a
@@ -403,44 +607,76 @@ class _ChatViewState extends State<ChatView> {
       if (_isRepeat(reply)) {
         final err = await _liteRtService.reseed(history: _replayHistory());
         if (err == null && mounted) {
-          reply = await _streamInto(fullPrompt, streamingMessage.timestamp);
+          reply = await _streamInto(fullPrompt, streamingMessage.id);
         }
       }
     } catch (err) {
       if (!mounted) return;
-      setState(() {
-        _messages[_messages.length - 1] = ChatMessage(
-          text: 'Something went wrong during inference: $err',
-          isUser: false,
-          timestamp: streamingMessage.timestamp,
-        );
-        _isGenerating = false;
-      });
+      _replaceLast(streamingMessage, 'Something went wrong during inference: $err');
+      setState(() => _isGenerating = false);
       _scrollToBottom();
       return;
     }
 
     if (!mounted) return;
+
+    // Boundary enforcement, after generation and before the screen. A prompt
+    // instruction makes "I'm a real person" rare; only this makes it never
+    // arrive. Offending sentences are removed rather than the whole reply
+    // regenerated — regeneration costs another 15–30 s and may violate again.
+    final outputVerdict = _guard.screenOutput(reply);
+    if (!outputVerdict.isAllowed) {
+      debugPrint('Guard rewrote a reply: ${outputVerdict.reason}');
+      reply = outputVerdict.replacement!;
+      _replaceLast(streamingMessage, reply);
+    }
+
     // The user's own words, not `fullPrompt`: the recalled-facts block is
     // scaffolding for one turn, and replaying it on a reseed would re-inject
     // facts chosen for a message that is no longer the current one.
     _remember(prompt, reply);
-    setState(() {
-      _isGenerating = false;
+    await _chatStore.updateText(streamingMessage.id, reply);
 
-      // Offered *after* the companion has answered, so the user gets a real
-      // reply first and the resource reads as an addition rather than a
-      // deflection. Once per session — repeating it would nag.
-      if (_concernTurns >= _concernBeforeOffer && !_offeredSupport) {
-        _offeredSupport = true;
-        _messages.add(ChatMessage(
-          text: CrisisGuard.gentleOffer(),
-          isUser: false,
-          timestamp: DateTime.now(),
-        ));
+    // Index the completed exchange so it can be retrieved months from now, and
+    // push the check-in timer out. Neither belongs in the reply path.
+    unawaited(() async {
+      try {
+        await _chunks.addExchange(userText: prompt, replyText: reply);
+        await _nudges.rearm();
+      } catch (e) {
+        debugPrint('Post-turn write failed: $e');
       }
-    });
+    }());
+
+    setState(() => _isGenerating = false);
+
+    // Offered *after* the companion has answered, so the user gets a real
+    // reply first and the resource reads as an addition rather than a
+    // deflection. Once per session — repeating it would nag.
+    if (_concernTurns >= _concernBeforeOffer && !_offeredSupport) {
+      _offeredSupport = true;
+      await _emitSystem(CrisisGuard.gentleOffer());
+    }
     _scrollToBottom();
+  }
+
+  /// Appends an app-authored line, on screen and on disk.
+  ///
+  /// Stored with `sentToModel: false` so it survives a restart like any other
+  /// turn but is never replayed to the model as something it said.
+  Future<void> _emitSystem(String text) async {
+    final message = _system(text);
+    await _chatStore.append(message);
+    if (!mounted) return;
+    setState(() => _messages.add(message));
+    _scrollToBottom();
+  }
+
+  /// Rewrites the slot [original] occupies, wherever it now sits.
+  void _replaceLast(ChatMessage original, String text) {
+    final index = _messages.indexWhere((m) => m.id == original.id);
+    if (index < 0) return;
+    setState(() => _messages[index] = _messages[index].copyWith(text: text));
   }
 
   /// Streams one reply into the last message slot, completing with the raw text.
@@ -449,7 +685,7 @@ class _ChatViewState extends State<ChatView> {
   /// accumulated text, so `_comma_` artifacts never reach the screen. The raw
   /// text is what completes, because that is what the model actually said and
   /// what repeat detection and the replay transcript should be based on.
-  Future<String> _streamInto(String prompt, DateTime slotTimestamp) {
+  Future<String> _streamInto(String prompt, String slotId) {
     final completer = Completer<String>();
     final buffer = StringBuffer();
     StreamSubscription<String>? subscription;
@@ -458,13 +694,12 @@ class _ChatViewState extends State<ChatView> {
       final sanitized =
           ReplySanitizer.cleanDetailed(buffer.toString(), streaming: streaming);
       if (mounted) {
-        setState(() {
-          _messages[_messages.length - 1] = ChatMessage(
-            text: sanitized.text,
-            isUser: false,
-            timestamp: slotTimestamp,
-          );
-        });
+        final index = _messages.indexWhere((m) => m.id == slotId);
+        if (index >= 0) {
+          setState(() {
+            _messages[index] = _messages[index].copyWith(text: sanitized.text);
+          });
+        }
         _scrollToBottom();
       }
       return sanitized.droppedSentences >= _loopTolerance;
@@ -551,8 +786,18 @@ class _ChatViewState extends State<ChatView> {
   static String _substanceOf(String reply) {
     final keys = ReplySanitizer.sentenceKeys(reply);
     if (keys.isEmpty) return '';
-    return keys.reduce((a, b) => b.length > a.length ? b : a);
+    final longest = keys.reduce((a, b) => b.length > a.length ? b : a);
+    // Too short to be evidence of a loop. Now that the companion talks like a
+    // friend rather than a clinician, replies are often a single line, and a
+    // person genuinely does say "that sounds rough" twice in a conversation
+    // without malfunctioning. Without this floor that natural repetition
+    // triggers a reseed — several seconds of re-prefill, and the companion
+    // loses the thread — as a penalty for sounding human.
+    return longest.length < _minSubstanceLength ? '' : longest;
   }
+
+  /// Shortest reply that can count as a repeat.
+  static const int _minSubstanceLength = 30;
 
   /// Records a completed exchange for replay and repeat detection.
   void _remember(String prompt, String reply) {
@@ -591,14 +836,6 @@ class _ChatViewState extends State<ChatView> {
       final err = await _liteRtService.reconfigure(updated);
       if (!mounted) return;
       setState(() {
-        _messages.add(ChatMessage(
-          text: err == null
-              ? 'Sampler updated ($updated). The companion has lost the '
-                  'earlier thread.'
-              : 'Could not apply sampler settings: $err',
-          isUser: false,
-          timestamp: DateTime.now(),
-        ));
         // reconfigure() discards conversation history, so the replay transcript
         // and repeat history go with it — otherwise they describe a
         // conversation the model is no longer in.
@@ -606,9 +843,15 @@ class _ChatViewState extends State<ChatView> {
         _recentReplies.clear();
         _modelTranscript.clear();
       });
-      _scrollToBottom();
+      await _emitSystem(
+        err == null
+            ? 'Sampler updated ($updated). The companion has lost the '
+                'earlier thread.'
+            : 'Could not apply sampler settings: $err',
+      );
     }
   }
+
 
   // ---------------------------------------------------------------- rendering
 
@@ -772,7 +1015,7 @@ class _ChatViewState extends State<ChatView> {
                 onLongPress: _openDevSettings,
                 child: OrganicInput(
                   controller: _textController,
-                  enabled: !_isGenerating,
+                  enabled: !_isGenerating && !_loadingHistory,
                   hint: s.circularSend
                       ? "What's on your mind..."
                       : "Explore what's on your mind...",

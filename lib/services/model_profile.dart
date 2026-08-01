@@ -62,13 +62,20 @@ class ModelProfile {
   /// Sampler is left near the runtime's own defaults. This model is not
   /// degenerate, so it does not need the wide sampling the fine-tune does, and
   /// widening it only costs coherence.
+  ///
+  /// The length guidance is phrased as a register rather than a sentence quota.
+  /// It previously read "Keep replies to 3 to 5 sentences", and a floor of three
+  /// is part of why the companion sounded stiff — asked "how are you" it had to
+  /// produce a paragraph, so it padded with clinical framing. A friend's reply
+  /// is allowed to be one line.
   static const stock = ModelProfile(
     id: 'stock-gemma4-e2b',
     label: 'Gemma 4 E2B (stock)',
     fileNamePatterns: ['gemma-4-e2b', 'gemma4-e2b', 'gemma_4_e2b'],
     personaMode: PersonaMode.full,
     lengthGuidance:
-        'Keep replies to 3 to 5 sentences. Do not use headings or bullet lists.',
+        'Keep it short, the length of a text message — often one or two '
+        'sentences, four at the very most. Never use headings or bullet lists.',
     temperature: 1.0,
     topK: 64,
     topP: 0.95,

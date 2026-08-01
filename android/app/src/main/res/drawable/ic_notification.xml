@@ -1,0 +1,22 @@
+<!--
+  Status-bar icon for companion check-ins.
+
+  Android masks notification small icons to a flat white silhouette on API 21+,
+  so this is deliberately a solid shape with no colour or gradient — anything
+  else renders as a white blob. A leaf, matching the app's Organic identity.
+
+  This file exists because the project has no `mipmap/ic_launcher`: the manifest
+  points at the framework's `sym_def_app_icon`, so the usual
+  `AndroidInitializationSettings('@mipmap/ic_launcher')` fails to resolve and
+  takes `main()` down with it before `runApp`.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M18.6,3.9c-6.3,-0.6 -12.4,2.6 -13.4,8.2c-0.4,2.3 0.1,4.4 1.2,6.1l-2.3,2.3c-0.4,0.4 -0.4,1 0,1.4s1,0.4 1.4,0l2.3,-2.3c1.7,1.1 3.8,1.6 6.1,1.2C19.5,19.8 22.7,13.7 22.1,7.4C22,5.5 20.5,4 18.6,3.9zM12.9,17.3c-1.6,0.3 -3.1,0.1 -4.3,-0.5l7.8,-7.8c0.4,-0.4 0.4,-1 0,-1.4s-1,-0.4 -1.4,0l-7.8,7.8c-0.6,-1.2 -0.8,-2.7 -0.5,-4.3c0.8,-4.4 5.7,-7 10.9,-6.5c0.9,0.1 1.6,0.8 1.7,1.7C19.9,11.6 17.3,16.5 12.9,17.3z" />
+</vector>

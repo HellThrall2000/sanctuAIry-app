@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../../services/chat_store.dart';
 import '../../services/local_profile.dart';
+import '../../services/nudge_service.dart';
 import '../../services/soundscape_controller.dart';
 import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
@@ -38,6 +40,7 @@ class SettingsPanel extends StatefulWidget {
 class _SettingsPanelState extends State<SettingsPanel> {
   final LocalProfile _profile = LocalProfile.instance;
   final SoundscapeController _sound = SoundscapeController.instance;
+  final NudgeService _nudges = NudgeService.instance;
 
   @override
   void initState() {
@@ -45,6 +48,9 @@ class _SettingsPanelState extends State<SettingsPanel> {
     _profile.addListener(_refresh);
     _sound.addListener(_refresh);
     _profile.load();
+    _nudges.load().then((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
@@ -109,8 +115,93 @@ class _SettingsPanelState extends State<SettingsPanel> {
             ),
           ],
         ),
+        const SizedBox(height: Organic.space4),
+        const OrganicSectionLabel('Check-ins'),
+        const SizedBox(height: Organic.space2),
+        _checkInCard(t),
+        const SizedBox(height: Organic.space4),
+        const OrganicSectionLabel('Conversation'),
+        const SizedBox(height: Organic.space2),
+        _conversationCard(t),
       ],
     );
+  }
+
+  /// Whether the companion may reach out after a long silence.
+  ///
+  /// Given its own section rather than buried, and switchable in one tap. An
+  /// app that messages people about their mental health has to make "stop"
+  /// trivially easy to find.
+  Widget _checkInCard(SanctuaryTokens t) {
+    return OrganicCard(
+      children: [
+        const OrganicCardTitle('Reach out to me', size: 13),
+        const OrganicCardBody(
+          'If we have not spoken for a few hours, I may send one message — '
+          'never more than one a day, and never overnight.',
+        ),
+        Row(
+          children: [
+            OrganicTag(
+              label: _nudges.enabled ? 'On' : 'Off',
+              variant: _nudges.enabled
+                  ? OrganicTagVariant.accent2
+                  : OrganicTagVariant.neutral,
+              onTap: () async {
+                await _nudges.setEnabled(!_nudges.enabled);
+                if (_nudges.enabled) await _nudges.rearm();
+                if (mounted) setState(() {});
+              },
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _conversationCard(SanctuaryTokens t) {
+    return OrganicCard(
+      children: [
+        const OrganicCardTitle('Clear conversation', size: 13),
+        const OrganicCardBody(
+          'Erases what is on screen. What I remember about you is kept '
+          'separately — clear that from What I Remember.',
+        ),
+        OrganicButton(
+          label: 'Clear conversation',
+          variant: OrganicButtonVariant.secondary,
+          fontSize: 11,
+          block: true,
+          foreground: Organic.danger,
+          onPressed: _confirmClearConversation,
+        ),
+      ],
+    );
+  }
+
+  Future<void> _confirmClearConversation() async {
+    final confirmed = await OrganicDialog.show<bool>(
+      context,
+      OrganicDialog(
+        title: 'Clear the conversation?',
+        body: 'Every message will be removed from this device and cannot be '
+            'recovered. What I remember about you is not affected.',
+        actions: [
+          OrganicButton(
+            label: 'Cancel',
+            variant: OrganicButtonVariant.secondary,
+            onPressed: () => Navigator.of(context).pop(false),
+          ),
+          OrganicButton(
+            label: 'Clear',
+            variant: OrganicButtonVariant.secondary,
+            foreground: Organic.danger,
+            onPressed: () => Navigator.of(context).pop(true),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) await ChatStore.instance.deleteAll();
   }
 
   Widget _profileCard(SanctuaryTokens t) {

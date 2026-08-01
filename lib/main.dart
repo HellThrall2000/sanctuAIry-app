@@ -1,7 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'screens/home_shell.dart';
+import 'services/notification_service.dart';
+import 'services/nudge_service.dart';
 import 'theme/app_theme.dart';
 
 const _themePrefKey = 'sanctuary_theme_dark';
@@ -12,6 +16,25 @@ void main() async {
   // Sunlit by default: the Organic system is authored as a light theme, and
   // Dusk is the derived one.
   final isDark = prefs.getBool(_themePrefKey) ?? false;
+
+  // Channel and timezone setup only. Permission is deliberately *not* requested
+  // here — it is asked for the first time a check-in is actually scheduled, by
+  // which point the user has had a conversation and the prompt has some
+  // context. A permission dialog on first launch, before the app has done
+  // anything, is how you get denied.
+  //
+  // Not awaited, and wrapped: nothing about an optional reminder may stand
+  // between the user and their conversation. An earlier version awaited this,
+  // and a bad notification-icon reference threw here and left the app on its
+  // splash screen indefinitely — the whole app lost to a feature that only
+  // matters when it is closed. NotificationService.init() is idempotent, so
+  // the first real use simply awaits whatever this started.
+  unawaited(NotificationService.instance.init().catchError((Object e) {
+    debugPrint('Notification setup failed, continuing without it: $e');
+  }));
+  unawaited(NudgeService.instance.load().catchError((Object e) {
+    debugPrint('Nudge settings failed to load: $e');
+  }));
 
   runApp(SanctuaryApp(initialDark: isDark));
 }

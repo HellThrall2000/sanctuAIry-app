@@ -2,6 +2,15 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+
+    <!-- Companion check-ins. Android 13+ requires this to be granted at
+         runtime; it is requested the first time a check-in is scheduled
+         rather than at launch. SCHEDULE_EXACT_ALARM is deliberately absent —
+         check-ins use inexact scheduling, which keeps the app off a
+         high-friction permission and is easier on the battery. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- So a pending check-in survives a reboot. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <application
         android:label="sanctuary"
         android:name="${applicationName}"

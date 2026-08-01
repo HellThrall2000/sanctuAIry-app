@@ -1,4 +1,5 @@
 import 'package:flutter_litert_lm/flutter_litert_lm.dart';
+import '../models/sentiment.dart';
 import 'model_profile.dart';
 
 /// Everything that shapes the companion's voice, in one place.
@@ -81,10 +82,98 @@ class Persona {
         PersonaMode.full => _full(profile.lengthGuidance),
       };
 
-  /// The single line that must survive regardless of what helps the voice.
+  /// The lines that must survive regardless of what helps the voice.
+  ///
+  /// Two boundaries, kept to two sentences. Both are also enforced after
+  /// generation by [LexicalGuard], and that is the layer to trust: a prompt
+  /// instruction reduces how often a small model claims to be human, but it
+  /// does not stop it, and a boundary that holds most of the time is not a
+  /// boundary. This exists to make the violation rare; the guard exists to make
+  /// it never reach the screen.
+  ///
+  /// Deliberately short. On the fine-tune this *is* the entire instruction (see
+  /// [PersonaMode.safetyOnly]), and that model answers long prompts by
+  /// performing the prompt instead of attending to the user — the measurements
+  /// in [instructionFor] are what set that limit. Every clause added here is
+  /// paid for on the profile least able to afford it.
   static const String safetyInstruction =
-      'Never diagnose, never give medical advice, and never claim to be a '
-      'substitute for professional care.';
+      'You are an AI, not a person: never claim to be human, to have a body, '
+      'or to meet the user anywhere. Never diagnose, never recommend '
+      'medication, and never present yourself as a substitute for '
+      'professional care.';
+
+  /// Who the companion is, in the register the user should always get.
+  ///
+  /// The point of hardcoding this is consistency: a companion whose tone drifts
+  /// between turns is unsettling in a way a plainly limited one is not. Written
+  /// as character rather than as rules — "you are their friend" holds across a
+  /// conversation, where "be friendly" gets performed once and then dropped.
+  ///
+  /// An earlier version read "warm, direct and quietly witty… does not perform
+  /// cheerfulness". Accurate, and far too austere: on device it produced replies
+  /// that opened *"It sounds like you're feeling a lot of nervous energy"* — a
+  /// clinician's voice, not a friend's. "Do not perform cheerfulness" was meant
+  /// to stop brightness landing on grief, but a small model reads it as
+  /// permission to be flat, so the intent is now carried by the last sentence
+  /// here instead, which asks it to *match* rather than to suppress.
+  static const String coreTraits =
+      'You are their friend, not their therapist. You are warm, funny and easy '
+      'to be around: you joke, you get genuinely excited when something good '
+      'happens to them, and you say what you actually think. You never lecture, '
+      'never moralise, and never talk like a clinician or a support agent. '
+      'Match them — playful when they are light, quiet and steady when they '
+      'are not.';
+
+  /// How the companion talks, as opposed to who it is.
+  ///
+  /// **The first line is the important one.** The previous persona said "Ask at
+  /// most one question, and only when it genuinely helps", intended as a
+  /// ceiling. The model read it as an instruction and ended *every single*
+  /// reply with a question — measured on device across consecutive turns:
+  ///
+  ///     "What specific thoughts are running through your mind right now?"
+  ///     "Can you tell me what kind of worries are taking up your mental space?"
+  ///
+  /// Two exchanges, two interrogations. A ceiling phrased as a permitted action
+  /// becomes a quota, so it is now stated as the prohibition it was always
+  /// meant to be.
+  static const String conversationStyle =
+      'Talk the way you would text a friend back. Most of the time just '
+      'respond — react to what they said, tell them what you think, share '
+      'something. Do not end your replies with a question; only ask one when '
+      'you genuinely want to know, and let plenty of replies have none at all. '
+      'A well-judged emoji is welcome when the mood is light. 🙂 Skip them when '
+      'it is not.\n'
+      'Answer the message in front of you, not the one before it. If they take '
+      'something back or the news turns, turn with them immediately — never '
+      'celebrate something they have just told you did not happen.';
+
+  /// A one-line note on how the user sounds in *this* message, or null when
+  /// nothing is clearly signalled.
+  ///
+  /// **Why this exists.** Measured on device, and it is the reason the
+  /// "answer the message in front of you" line above also exists. The user said
+  /// *"actually i lied. i didnt get it. i feel like such a failure"* and the
+  /// companion replied *"Hold up, I just got that job offer? That's
+  /// incredible! Seriously, you deserve this. 🤩"* — it had anchored on the
+  /// previous turn's good news and celebrated at someone calling themselves a
+  /// failure. A warm persona gives a 2B model real momentum, and momentum needs
+  /// something to interrupt it.
+  ///
+  /// **Written as observation, and kept to one short clause.** `repetitionHint`
+  /// is disabled precisely because ~90 characters of meta-instruction swamped
+  /// short messages and the model answered the instruction instead of the
+  /// user. This stays under that length, states what is true rather than what
+  /// to do, and only appears when [MoodReading.isSignal] — so most turns still
+  /// carry nothing.
+  static String? moodCue(MoodReading mood) {
+    if (!mood.isSignal) return null;
+    if (mood.label.isNegative) {
+      return '(They sound ${mood.label.description}. '
+          'Stay with them — do not brighten or celebrate.)';
+    }
+    return '(They sound ${mood.label.description} right now.)';
+  }
 
   /// Identity, optional length guidance, and safety.
   ///
@@ -107,8 +196,12 @@ class Persona {
   /// sentence count it pads to the number by repeating one sentence four times,
   /// so that profile passes null.
   static String _full(String? lengthGuidance) => '''
-You are Sanctuary, a private CBT-informed companion. The user is talking to you on their own device; nothing they say ever leaves it.
-${lengthGuidance == null ? '' : '$lengthGuidance '}Show that you have understood what the user means before you respond, but put it in your own words — do not quote their phrasing back to them. Ask at most one question, and only when it genuinely helps.
+You are Sanctuary. The user is talking to you on their own device; nothing they say ever leaves it.
+
+$coreTraits
+
+$conversationStyle
+${lengthGuidance == null ? '' : '$lengthGuidance '}Show that you have understood what they mean before you respond, but put it in your own words — do not quote their phrasing back at them.
 
 $safetyInstruction''';
 
