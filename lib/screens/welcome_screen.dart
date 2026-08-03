@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 import '../services/consent.dart';
 import '../services/firebase_gateway.dart';
+import '../services/local_profile.dart';
 import '../services/usage_metrics.dart';
 import '../theme/tokens.dart';
 import '../theme/typography.dart';
@@ -71,6 +72,18 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         return;
       }
       UsageMetrics.instance.recordSignIn();
+
+      // Adopt the Google display name as the name the companion uses.
+      //
+      // Without this, signing in *here* left LocalProfile empty while the
+      // account dialog's path filled it — so the settings card greeted a
+      // signed-in user as "Guest Companion" and offered them a sign-in button
+      // they had already used. Only set when they have not chosen a name
+      // themselves; someone who typed "Ravi" should not be renamed by this.
+      final display = _auth.displayName;
+      if (display != null && !LocalProfile.instance.signedIn) {
+        await LocalProfile.instance.signIn(name: display);
+      }
     }
 
     await Consent.accept();

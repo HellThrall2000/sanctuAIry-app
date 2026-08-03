@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "318674112045",
+    "project_id": "sanctuairy-1f545",
+    "storage_bucket": "sanctuairy-1f545.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:318674112045:android:14520a681ad8e4e76732a4",
+        "android_client_info": {
+          "package_name": "com.sanctuairy.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "318674112045-clpkgprsqc9cfgtlocqn90utkpkldssa.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.sanctuairy.app",
+            "certificate_hash": "bb9b1e1fd7952aa44e8ecfa2e82bc61f2423e179"
+          }
+        },
+        {
+          "client_id": "318674112045-t0jnjmeou4dc6kho30kqu7jhcfm7n38v.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD7vXcDZ-BKoxes88qb_QuFqhrrEwugvPE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "318674112045-t0jnjmeou4dc6kho30kqu7jhcfm7n38v.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
