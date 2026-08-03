@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_litert_lm/flutter_litert_lm.dart';
+import 'model_download_service.dart';
 import 'model_profile.dart';
 import 'model_settings.dart';
 
@@ -61,13 +63,28 @@ class LiteRtService {
   Future<List<LocatedModel>> findLocalModels() async {
     final searchDirs = <String>[];
     try {
+      // Where ModelDownloadService puts a fetched model. First, because on a
+      // Play install it is the only place a model ever comes from.
+      searchDirs.add((await ModelDownloadService.instance.modelDirectory()).path);
+
       final extDir = await getExternalStorageDirectory();
       if (extDir != null) searchDirs.add(extDir.path);
       searchDirs.add((await getApplicationDocumentsDirectory()).path);
+      searchDirs.add((await getApplicationSupportDirectory()).path);
     } catch (e) {
-      print("Error resolving app directories: $e");
+      debugPrint('Error resolving app directories: $e');
     }
-    searchDirs.addAll(const ['/sdcard/Download', '/sdcard']);
+
+    // The adb-push workflow, kept for development only.
+    //
+    // Reading these in a shipped build is not merely unnecessary, it is
+    // impossible: from Android 10 scoped storage denies an app access to shared
+    // storage it did not create, and the broad-access permission that would
+    // restore it is one Play grants almost no one. A release build finds its
+    // model in the managed directory above or not at all.
+    if (kDebugMode) {
+      searchDirs.addAll(const ['/sdcard/Download', '/sdcard']);
+    }
 
     final found = <String, LocatedModel>{};
     for (final dir in searchDirs) {
@@ -118,13 +135,51 @@ class LiteRtService {
     return models.first;
   }
 
+  File? _logFile;
+
+  /// Largest the diagnostics log may grow before it is started over.
+  ///
+  /// It is append-only across every model load and generation, so without a cap
+  /// it grows without limit inside the user's app storage.
+  static const int _maxLogBytes = 256 * 1024;
+
+  /// Appends a line to the engine diagnostics log.
+  ///
+  /// **App-private, not `/sdcard/Download`.** This used to write to the public
+  /// Downloads folder, which is three separate problems in a shipped app: it
+  /// needs storage permission the app does not hold, scoped storage blocks it
+  /// outright from Android 10, and it leaves a file behind after uninstall.
+  /// The support directory needs no permission and is removed with the app.
+  ///
+  /// Failures here are swallowed. Diagnostics must never be able to break the
+  /// thing they are diagnosing.
   Future<void> logToFile(String logMessage) async {
     try {
-      final file = File('/sdcard/Download/sanctuary_crash_log.txt');
+      final file = _logFile ??=
+          File('${(await getApplicationSupportDirectory()).path}/engine.log');
+
+      if (await file.exists() && await file.length() > _maxLogBytes) {
+        await file.writeAsString('');
+      }
+
       final timestamp = DateTime.now().toIso8601String();
-      await file.writeAsString('[$timestamp] $logMessage\n', mode: FileMode.append);
+      await file.writeAsString(
+        '[$timestamp] $logMessage\n',
+        mode: FileMode.append,
+      );
     } catch (e) {
-      print("Failed to write to crash log file: $e");
+      debugPrint('Failed to write engine log: $e');
+    }
+  }
+
+  /// The diagnostics log, for the developer panel to show or share.
+  Future<String> readLog() async {
+    try {
+      final file = _logFile ??=
+          File('${(await getApplicationSupportDirectory()).path}/engine.log');
+      return await file.exists() ? await file.readAsString() : '';
+    } catch (e) {
+      return 'Could not read log: $e';
     }
   }
 

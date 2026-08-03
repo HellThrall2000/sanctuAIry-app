@@ -4,6 +4,23 @@ plugins {
     id "dev.flutter.flutter-gradle-plugin"
 }
 
+// Applied only when the config file is present.
+//
+// The google-services plugin fails the build outright with "File
+// google-services.json is missing" when it is not — which would mean nobody
+// could build or run this repository until they had created a Firebase project.
+// Sanctuary works entirely offline and Firebase is optional to it, so the build
+// has to reflect that: without the file you get a working app with no accounts
+// and no analytics, and FirebaseGateway reports itself unavailable at runtime.
+// See docs/RELEASE.md.
+if (project.file('google-services.json').exists()) {
+    apply plugin: 'com.google.gms.google-services'
+} else {
+    logger.lifecycle(
+        "sanctuAIry: no android/app/google-services.json - building without " +
+        "Firebase. Accounts and usage metrics will be disabled at runtime.")
+}
+
 def localProperties = new Properties()
 def localPropertiesFile = rootProject.file('local.properties')
 if (localPropertiesFile.exists()) {
@@ -22,8 +39,27 @@ if (flutterVersionName == null) {
     flutterVersionName = '1.0'
 }
 
+// Upload-key credentials. Deliberately NOT in the repository — android/key.properties
+// and the .jks it points at are both gitignored. See docs/RELEASE.md for generating
+// the keystore.
+//
+// Absent, the release build falls back to the debug key so that `flutter run
+// --release` and profiling still work on a machine that has never seen the
+// keystore. That build is *not* uploadable: Play rejects the debug signature.
+// `assertUploadKey` below turns that silent fallback into a loud failure for the
+// one task where it actually matters.
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file('key.properties')
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.withReader('UTF-8') { reader ->
+        keystoreProperties.load(reader)
+    }
+}
+def hasUploadKey = keystorePropertiesFile.exists() &&
+        keystoreProperties['storeFile'] != null
+
 android {
-    namespace "com.example.sanctuary"
+    namespace "com.sanctuairy.app"
     compileSdk 36
     ndkVersion = "28.2.13676358"
 
@@ -46,19 +82,74 @@ android {
     }
 
     defaultConfig {
-        applicationId "com.example.sanctuary"
+        // Permanent once published — Play identifies the app by this string for
+        // the life of the listing and it can never be changed. Was
+        // "com.example.sanctuary", which the Play Console rejects outright.
+        applicationId "com.sanctuairy.app"
         minSdk 24
         targetSdk 36
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName
     }
 
+    signingConfigs {
+        release {
+            if (hasUploadKey) {
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+                storeFile file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+            }
+        }
+    }
+
     buildTypes {
         release {
-            signingConfig signingConfigs.debug
+            signingConfig hasUploadKey ? signingConfigs.release : signingConfigs.debug
+
+            // Left off deliberately. R8's value here is small — an APK this size
+            // is native libraries and the Flutter engine, not Java bytecode — and
+            // the risk is not: litertlm reaches its classes through JNI, which R8
+            // cannot see, so a stripped or renamed symbol surfaces as a
+            // ClassNotFoundError inside nativeCreateEngine at model-load time.
+            // Turn these on only behind a full on-device load test.
             minifyEnabled false
             shrinkResources false
         }
+    }
+}
+
+// Refuses to build an app bundle at all without an upload key, rather than
+// emitting a debug-signed .aab that Play rejects on upload.
+//
+// **This must run at task-graph time, not as a doFirst.** `bundleRelease` is an
+// anchor task: the signing and writing are done by `packageReleaseBundle`, one
+// of its *dependencies*. A `doFirst` on `bundleRelease` therefore fires only
+// after the .aab has already been written, so the build failed loudly while
+// leaving a debug-signed bundle sitting in build/outputs/bundle/release/ —
+// exactly where someone would pick it up, and looking for all the world like the
+// check had protected them. Verified: that file's certificate read
+// `CN=Android Debug`.
+//
+// whenReady fires before any task executes, so nothing is produced.
+gradle.taskGraph.whenReady { graph ->
+    if (hasUploadKey) return
+
+    // `bundleRelease` is the anchor; `packageReleaseBundle` and
+    // `signReleaseBundle` are the tasks that actually emit it. Matching on the
+    // suffix catches flavoured variants too, and deliberately does not match
+    // `bundleReleaseResources`, which is part of an ordinary APK build.
+    def emitsBundle = graph.allTasks.any { t ->
+        t.project == project &&
+            (t.name == 'bundleRelease' || t.name.endsWith('ReleaseBundle'))
+    }
+
+    if (emitsBundle) {
+        throw new GradleException(
+            "No upload key. android/key.properties is missing or has no " +
+            "storeFile, so this bundle would be signed with the debug key and " +
+            "rejected by Play. See docs/RELEASE.md step 1."
+        )
     }
 }
 

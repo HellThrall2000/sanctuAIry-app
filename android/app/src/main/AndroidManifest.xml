@@ -1,7 +1,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Needed for exactly two things, both one-off: fetching the model on first
+         run, and Google sign-in when the user chooses it. No conversation,
+         diary entry or memory ever crosses the network. -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- So a multi-gigabyte model download and a 15-30s generation are not killed
+         when the screen goes off. Held with a timeout, never indefinitely. -->
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+    <!-- Lets the downloader wait for Wi-Fi instead of spending a user's mobile
+         data allowance on a 2.5 GB file. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
 
     <!-- Companion check-ins. Android 13+ requires this to be granted at
          runtime; it is requested the first time a check-in is scheduled
@@ -12,10 +19,11 @@
     <!-- So a pending check-in survives a reboot. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <application
-        android:label="sanctuary"
+        android:label="sanctuAIry"
         android:name="${applicationName}"
         android:largeHeap="true"
-        android:icon="@android:drawable/sym_def_app_icon">
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round">
         <activity
             android:name=".MainActivity"
             android:exported="true"

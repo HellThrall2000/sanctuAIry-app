@@ -26,6 +26,7 @@ import '../../services/relationship_log.dart';
 import '../../services/reply_sanitizer.dart';
 import '../../services/sentiment_analyzer.dart';
 import '../../services/topic_extractor.dart';
+import '../../services/usage_metrics.dart';
 import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
 import '../dev_settings_sheet.dart';
@@ -419,6 +420,10 @@ class _ChatViewState extends State<ChatView> {
       _isGenerating = true;
     });
     _scrollToBottom();
+    // A count, nothing more. UsageMetrics is given no argument here on purpose:
+    // there is no parameter through which the message itself could ever reach
+    // it, by accident or otherwise.
+    UsageMetrics.instance.recordMessageSent();
     await _chatStore.append(userMessage);
     await Future.delayed(const Duration(milliseconds: 150));
 
@@ -521,9 +526,11 @@ class _ChatViewState extends State<ChatView> {
           setState(() => _isGenerating = false);
           return;
         }
+        UsageMetrics.instance.recordModelReady();
       } else {
         await _emitSystem(
-          'Companion offline — the model file is not on this device.',
+          'The companion has not been downloaded yet — you can start that in '
+          'Settings.',
         );
         setState(() => _isGenerating = false);
         return;

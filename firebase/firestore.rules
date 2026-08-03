@@ -1,0 +1,113 @@
+rules_version = '2';
+
+// Security rules for sanctuAIry.
+//
+// Deploy with:  firebase deploy --only firestore:rules
+//
+// These are not a formality. Firebase offers two starting points and both are
+// wrong to ship: "test mode" is world-readable and world-writable for 30 days
+// and then denies everything without warning, and "locked mode" denies the app
+// itself. What follows is the actual policy — a signed-in user may touch exactly
+// one document, their own, and may put only known fields in it.
+//
+// The field allowlist is the part that is easy to skip and shouldn't be. Without
+// it, anyone holding an anonymous token — which the app hands out to every
+// install, by design — can write arbitrary documents into your project and spend
+// the free tier on your behalf.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    // The profile document: who this account is, at the coarsest level.
+    match /users/{uid} {
+
+      // Every key UsageMetrics.sync() may write here, and nothing else.
+      // Keep in sync with lib/services/usage_metrics.dart.
+      function hasOnlyKnownFields() {
+        return request.resource.data.keys().hasOnly([
+          'firstSeenAt',
+          'lastSeenAt',
+          'accountKind',
+          'email',
+          'displayName',
+          'appVersion',
+          'platform'
+        ]);
+      }
+
+      // Caps the strings so a tampered client cannot grow the document
+      // without limit on fields that should hold an email and a name.
+      function hasSaneValues() {
+        return (!('email' in request.resource.data.keys())
+                || request.resource.data.email == null
+                || request.resource.data.email.size() < 320)
+            && (!('displayName' in request.resource.data.keys())
+                || request.resource.data.displayName == null
+                || request.resource.data.displayName.size() < 200);
+      }
+
+      allow read: if isOwner(uid);
+      allow create, update: if isOwner(uid)
+                            && hasOnlyKnownFields()
+                            && hasSaneValues();
+      allow delete: if isOwner(uid);
+    }
+
+    // One document per calendar day, written as an absolute total for that day.
+    //
+    // The document id is the local date the activity happened on, which is what
+    // makes the write idempotent: a retry, a duplicate, or a write queued while
+    // offline and delivered days later all land on the same document and
+    // converge on the same value.
+    match /users/{uid}/daily/{date} {
+
+      function hasOnlyKnownFields() {
+        return request.resource.data.keys().hasOnly([
+          'date',
+          'updatedAt',
+          'activeSeconds',
+          'activeHours',
+          'sessions',
+          'messages',
+          'journalEntries',
+          'modelLoads'
+        ]);
+      }
+
+      // A day cannot contain more than a day. Without this a tampered client
+      // could claim arbitrary usage and make the figures worthless — which,
+      // since every install is handed an anonymous token by design, is not a
+      // hypothetical attacker.
+      function hasSaneValues() {
+        return request.resource.data.get('activeSeconds', 0) is int
+            && request.resource.data.get('activeSeconds', 0) >= 0
+            && request.resource.data.get('activeSeconds', 0) <= 86400
+            && request.resource.data.get('sessions', 0) is int
+            && request.resource.data.get('sessions', 0) >= 0
+            && request.resource.data.get('messages', 0) is int
+            && request.resource.data.get('messages', 0) >= 0
+            && request.resource.data.get('journalEntries', 0) is int
+            && request.resource.data.get('journalEntries', 0) >= 0;
+      }
+
+      allow read: if isOwner(uid);
+      allow create, update: if isOwner(uid)
+                            && hasOnlyKnownFields()
+                            && hasSaneValues();
+      // Needed by "delete my account", which clears the subcollection before
+      // removing the profile document.
+      allow delete: if isOwner(uid);
+    }
+
+    // Nothing else in this project is reachable from a client. The app writes
+    // exactly one collection; anything else appearing here would be someone
+    // else's idea, not ours.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

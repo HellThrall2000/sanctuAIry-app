@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The two page backgrounds from lib/theme/tokens.dart, mirrored here so the
+  launch window matches the first frame Flutter paints. Keep in sync: these are
+  Organic.bg (Sunlit) and the Dusk equivalent.
+-->
+<resources>
+    <color name="sanctuary_launch_bg">#F5EAD8</color>
+</resources>

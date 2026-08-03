@@ -258,7 +258,7 @@ P5.1 ─────────────────────────
 
 ## Standing checks (every phase)
 
-- `adb shell dumpsys activity exit-info com.example.sanctuary` shows no `LOW_MEMORY`
+- `adb shell dumpsys activity exit-info com.sanctuairy.app` shows no `LOW_MEMORY`
 - Peak RSS under ~2.5 GB (stock currently peaks ~2.03 GB)
 - Model still loads on the CPU backend with the 0.13.1 runtime pin
 - No raw text from an `ai_mode = 'derive'` journal ever reaches the model

@@ -26,6 +26,14 @@ dependencies:
   flutter_local_notifications: ^22.2.0
   timezone: ^0.11.1
   flutter_timezone: ^5.1.0
+  firebase_core: ^4.12.1
+  firebase_auth: ^6.5.6
+  firebase_analytics: ^12.4.5
+  cloud_firestore: ^6.7.1
+  google_sign_in: ^7.2.0
+  http: ^1.6.0
+  connectivity_plus: ^7.3.1
+  package_info_plus: ^9.0.1
 
 dev_dependencies:
   flutter_test:
@@ -35,10 +43,18 @@ dev_dependencies:
 flutter:
   uses-material-design: true
 
-  # assets:
-  #   - assets/audio/rain.mp3
-  #   - assets/audio/resonance.mp3
-  #   - assets/audio/bells.mp3
+  # Ambient loops for "Environment Resonance".
+  #
+  # Listed file by file rather than as `assets/audio/`, deliberately: a
+  # directory entry bundles whatever happens to be in the folder, so a stray
+  # source WAV or an editor's backup would silently add tens of megabytes to
+  # every install. It also keeps ATTRIBUTIONS.md out of the APK.
+  #
+  # Adding a loop is two lines: one here, and `bundled: true` in Soundscape —
+  # see lib/services/soundscape_controller.dart. Record its licence in
+  # assets/audio/ATTRIBUTIONS.md at the same time.
+  assets:
+    - assets/audio/Glass_and_Petrichor.mp3
 
   # Organic design system (see "Sanctuary design variations/"). Both families
   # are SIL Open Font License; the licence texts ship in assets/fonts/.
