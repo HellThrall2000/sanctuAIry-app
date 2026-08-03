@@ -3,36 +3,40 @@
 import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// The display name and email shown in the settings panel.
+/// The name the companion calls the user by.
 ///
-/// The design calls this "Sign In", and its own copy is explicit about what it
-/// is: *"Instant offline demo login — nothing leaves this device."* There is no
-/// account, no server and no credential — this stores two strings in
-/// [SharedPreferences] so the companion has something to call the user and the
-/// avatar has an initial. Naming it [LocalProfile] rather than `AuthService`
-/// keeps that honest at every call site.
+/// **Name only, deliberately.** This began as the prototype's fake demo login
+/// and stored an email alongside the name — defaulting to a made-up
+/// `explorer@sanctuary.private` whenever the field was blank, which it almost
+/// always was. Once real authentication arrived, that placeholder started
+/// appearing directly beneath a genuine Google display name in the settings
+/// card, reading exactly like the address on the account. It was never an
+/// address at all.
+///
+/// So the email is gone from here entirely. There is one source for it now —
+/// [AuthService.email], which is null unless the user actually signed in with
+/// Google — and a fiction cannot be shown in its place.
+///
+/// What remains is a single string in [SharedPreferences] so the companion has
+/// something to call the user and the avatar has an initial. It needs no
+/// account, which is why it survives at all.
 class LocalProfile extends ChangeNotifier {
   static final LocalProfile instance = LocalProfile._();
 
   LocalProfile._();
 
   static const _nameKey = 'sanctuary_profile_name';
-  static const _emailKey = 'sanctuary_profile_email';
 
-  /// Placeholders from the prototype, used when a field is left blank.
+  /// Placeholder from the prototype, used when the name is left blank.
   static const defaultName = 'Sovereign Soul';
-  static const defaultEmail = 'explorer@sanctuary.private';
 
   String? _name;
-  String? _email;
   bool _loaded = false;
 
   bool get signedIn => _name != null;
 
-  /// The stored name, or the prototype's placeholder when signed out.
+  /// The stored name, or the prototype's placeholder when unset.
   String get name => _name ?? defaultName;
-
-  String get email => _email ?? defaultEmail;
 
   String get initial => name.isEmpty ? 'S' : name.characters.first.toUpperCase();
 
@@ -41,27 +45,24 @@ class LocalProfile extends ChangeNotifier {
     _loaded = true;
     final prefs = await SharedPreferences.getInstance();
     _name = prefs.getString(_nameKey);
-    _email = prefs.getString(_emailKey);
     notifyListeners();
   }
 
-  /// Stores the profile, substituting the placeholders for blank fields —
-  /// `doSignIn` in the prototype does the same.
-  Future<void> signIn({String? name, String? email}) async {
+  /// Stores the name, substituting the placeholder when blank.
+  Future<void> signIn({String? name}) async {
     _name = (name?.trim().isNotEmpty ?? false) ? name!.trim() : defaultName;
-    _email = (email?.trim().isNotEmpty ?? false) ? email!.trim() : defaultEmail;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_nameKey, _name!);
-    await prefs.setString(_emailKey, _email!);
     notifyListeners();
   }
 
   Future<void> signOut() async {
     _name = null;
-    _email = null;
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_nameKey);
-    await prefs.remove(_emailKey);
+    // The old email key is removed too, so a profile written by an earlier
+    // build does not leave the placeholder behind in preferences.
+    await prefs.remove('sanctuary_profile_email');
     notifyListeners();
   }
 }

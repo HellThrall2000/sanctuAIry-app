@@ -4,7 +4,13 @@
       "WebSearch",
       "WebFetch(domain:ai.google.dev)",
       "WebFetch(domain:developers.google.com)",
-      "Bash(MSYS_NO_PATHCONV=1 C:/AndroidSDK/platform-tools/adb.exe shell dumpsys audio)"
+      "Bash(MSYS_NO_PATHCONV=1 C:/AndroidSDK/platform-tools/adb.exe shell dumpsys audio)",
+      "Bash(keytool -list -v -alias androiddebugkey -keystore \"C:/Users/hellt/.android/debug.keystore\" -storepass android -keypass android)",
+      "Bash(python -c ' *)",
+      "Bash(cd e:/Projects/sanctuary-app && stat -c '%y  %s bytes' android/app/google-services.json && echo \"--- current time ---\" && date '+%Y-%m-%d %H:%M:%S')",
+      "Read(//e/Projects/sanctuary-app/**)",
+      "Bash(MSYS_NO_PATHCONV=1 C:/AndroidSDK/platform-tools/adb.exe shell input tap 301 425)",
+      "Bash(MSYS_NO_PATHCONV=1 C:/AndroidSDK/platform-tools/adb.exe shell input keyevent KEYCODE_HOME)"
     ]
   }
 }

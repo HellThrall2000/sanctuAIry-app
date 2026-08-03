@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../../screens/model_setup_screen.dart';
+import '../../services/auth_service.dart';
 import '../../services/chat_store.dart';
+import '../../services/consent.dart';
 import '../../services/litert_service.dart';
 import '../../services/local_profile.dart';
 import '../../services/nudge_service.dart';
@@ -48,6 +50,8 @@ class _SettingsPanelState extends State<SettingsPanel> {
     super.initState();
     _profile.addListener(_refresh);
     _sound.addListener(_refresh);
+    // The profile card shows the account's email, so it has to follow auth.
+    AuthService.instance.addListener(_refresh);
     _profile.load();
     _checkModel();
     _nudges.load().then((_) {
@@ -59,6 +63,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
   void dispose() {
     _profile.removeListener(_refresh);
     _sound.removeListener(_refresh);
+    AuthService.instance.removeListener(_refresh);
     super.dispose();
   }
 
@@ -225,27 +230,40 @@ class _SettingsPanelState extends State<SettingsPanel> {
       );
     }
 
+    // The real address on the account, or nothing. Never a placeholder: this
+    // line sits directly under the display name and reads as the account's
+    // email, so inventing one is worse than leaving the space empty.
+    final email = AuthService.instance.email;
+
     return OrganicCard(
       children: [
         OrganicCardTitle(_profile.name, size: 13),
-        // `font-family: ui-monospace; font-size: 10px`
-        Text(
-          _profile.email,
-          style: OrganicText.cardBody(t).copyWith(
-            fontFamily: 'monospace',
-            fontFamilyFallback: const ['Courier New', 'monospace'],
-            fontSize: 10,
+        if (email != null)
+          // `font-family: ui-monospace; font-size: 10px`
+          Text(
+            email,
+            style: OrganicText.cardBody(t).copyWith(
+              fontFamily: 'monospace',
+              fontFamilyFallback: const ['Courier New', 'monospace'],
+              fontSize: 10,
+            ),
           ),
-        ),
-        OrganicButton(
-          label: 'Logout Session',
-          variant: OrganicButtonVariant.secondary,
-          fontSize: 10,
-          foreground: Organic.danger,
-          onPressed: () async {
-            await _profile.signOut();
-          },
-        ),
+        // Hidden where an account is required, matching the account dialog.
+        // On Android this used to clear the local name while leaving the
+        // Firebase session signed in — two different ideas of "logged out" on
+        // one screen, and the app would demand a sign-in it already had.
+        if (!Consent.requiresAccount)
+          OrganicButton(
+            label: 'Logout Session',
+            variant: OrganicButtonVariant.secondary,
+            fontSize: 10,
+            foreground: Organic.danger,
+            onPressed: () async {
+              // Both halves, so "logged out" means one thing.
+              await AuthService.instance.signOut();
+              await _profile.signOut();
+            },
+          ),
       ],
     );
   }
