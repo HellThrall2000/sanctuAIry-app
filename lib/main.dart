@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'screens/home_shell.dart';
+import 'services/memory_cache.dart';
 import 'services/notification_service.dart';
 import 'services/nudge_service.dart';
 import 'theme/app_theme.dart';
@@ -36,6 +37,14 @@ void main() async {
     debugPrint('Nudge settings failed to load: $e');
   }));
 
+  // Build the companion's working memory now, while the user is still reading
+  // the first screen, so the first message costs no database work at all. This
+  // also backfills anything the diary is owed — an entry permitted before
+  // extraction existed produces its facts and chunks here.
+  unawaited(MemoryCache.instance.warm().catchError((Object e) {
+    debugPrint('Memory warm failed: $e');
+  }));
+
   runApp(SanctuaryApp(initialDark: isDark));
 }
 
@@ -51,13 +60,39 @@ class SanctuaryApp extends StatefulWidget {
       context.findAncestorStateOfType<SanctuaryAppState>()!;
 }
 
-class SanctuaryAppState extends State<SanctuaryApp> {
+class SanctuaryAppState extends State<SanctuaryApp> with WidgetsBindingObserver {
   late bool _isDark;
 
   @override
   void initState() {
     super.initState();
     _isDark = widget.initialDark;
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// Condenses the session when the app leaves the foreground.
+  ///
+  /// `paused` rather than `detached`: Android is not obliged to deliver
+  /// `detached` at all, and a summary written only on a graceful exit would be
+  /// missing precisely when the app was killed for memory — which, with a 2.5 GB
+  /// model resident, is the common case.
+  ///
+  /// Summarising is extractive and takes microseconds, so it completes inside
+  /// the window the platform allows. Nothing here blocks the UI.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      unawaited(MemoryCache.instance.onSessionEnded().catchError((Object e) {
+        debugPrint('Session summary on pause failed: $e');
+      }));
+    }
   }
 
   bool get isDark => _isDark;

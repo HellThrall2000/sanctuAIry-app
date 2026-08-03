@@ -133,6 +133,9 @@ class FactExtractor {
       // A relation word is not a name ("my dog cat"), and neither is a verb.
       if (_relations.contains(name.toLowerCase())) return;
       if (_isFillerAfterRelation(name.toLowerCase())) return;
+      // Nor is a pronoun. "called" is both a naming frame and an ordinary verb,
+      // so *"my dad called me"* was being stored as "Their dad is called me."
+      if (_pronouns.contains(name.toLowerCase())) return;
       namedRelations.add(relation);
       add(FactKind.relationship, 'relationship:$relation', name,
           'Their $relation is called {}.', lower: false);
@@ -155,11 +158,41 @@ class FactExtractor {
     for (final m in bare.allMatches(text)) {
       final relation = m[1]!.toLowerCase();
       if (namedRelations.contains(relation)) continue;
+
+      // "my girlfriend" does not mean "has a girlfriend". Measured on device:
+      // a diary entry titled *"My girlfriend broke up with me"* was stored as
+      // **"They have a girlfriend."**, and the companion later volunteered
+      // "I heard your girlfriend is making that amazing lasagna again" to
+      // someone whose partner had left. A wrong fact is worse than a missing
+      // one, and this was the worst kind — confidently contradicting the very
+      // thing the user had written down.
+      //
+      // Unlike the name problem above, this is tractable: endings are a small,
+      // high-precision closed set, where verbs in general are not.
+      final ending = _endingNear(text, m.start);
+      if (ending != null) {
+        // Recorded as what actually happened, so the companion knows about the
+        // loss rather than merely not knowing about the relationship.
+        //
+        // Bereavement is worded separately. "Their relationship with their dad
+        // has ended" is a grotesque way to say a parent died, and this text is
+        // read back to someone who is grieving.
+        add(
+          FactKind.event,
+          'relationship_ended:$relation',
+          relation,
+          _isBereavement(ending)
+              ? 'They have lost their {}.'
+              : 'Their relationship with their {} has ended.',
+        );
+        continue;
+      }
       add(FactKind.relationship, 'relationship:$relation', relation,
           'They have a {}.');
     }
 
     // ── likes and dislikes ──────────────────────────────────────────────────
+    // (relationship-ending helpers live at the bottom of the class)
     for (final m in RegExp(r"\bi\s+(?:really\s+)?(?:love|like|enjoy)\s+([\w\s-]{2,40})")
         .allMatches(t)) {
       final v = _clean(m[1]!);
@@ -204,6 +237,62 @@ class FactExtractor {
         'got', 'makes', 'made', 'took', 'takes', 'calls', 'called', 'works',
         'lives', 'loves', 'hates', 'likes',
       }.contains(word);
+
+  /// Never a person's name, however the frame reads.
+  static const _pronouns = {
+    'me', 'him', 'her', 'us', 'them', 'you', 'it', 'myself', 'himself',
+    'herself', 'themselves', 'yourself', 'today', 'yesterday', 'tomorrow',
+    'again', 'back', 'earlier', 'later', 'twice',
+  };
+
+  /// Phrases that mean a relationship is over.
+  ///
+  /// A small, high-precision set. The comment above the naming patterns warns
+  /// that a verb blocklist is never complete — that is true when you are trying
+  /// to enumerate every verb a relation can take, and false here, where only a
+  /// handful of constructions actually end one. Missing an ending leaves the
+  /// old behaviour (a present-tense relation), so the failure mode of an
+  /// incomplete list is what we already had, not something worse.
+  static final RegExp _relationshipEnded = RegExp(
+    r"("
+    r"\bbroke\s+up\b|\bbreaking\s+up\b|\bbroken\s+up\b|\bbreakup\b|\bbreak-up\b"
+    r"|\bdumped\b|\bleft\s+me\b|\bwalked\s+out\b|\bwe\s+split\b|\bsplit\s+up\b"
+    r"|\bdivorc(?:e|ed|ing)\b|\bseparated\b"
+    r"|\bpassed\s+away\b|\bdied\b|\bfuneral\b"
+    r"|\bex[-\s]?(?:girlfriend|boyfriend|wife|husband|partner)\b"
+    r"|\bis\s+no\s+longer\b|\bused\s+to\s+be\b"
+    r")",
+    caseSensitive: false,
+  );
+
+  /// Whether the ending phrase describes a death rather than a separation.
+  static bool _isBereavement(String ending) {
+    final e = ending.toLowerCase();
+    return e.contains('died') ||
+        e.contains('passed away') ||
+        e.contains('funeral');
+  }
+
+  /// Whether an ending phrase sits in the same sentence as the relation at
+  /// [relationIndex].
+  ///
+  /// Scoped to the sentence rather than the whole text: a diary entry can
+  /// mention a breakup in one paragraph and a living sister in another, and a
+  /// document-wide check would erase the sister too.
+  static String? _endingNear(String text, int relationIndex) {
+    var start = 0;
+    var end = text.length;
+    for (final match in RegExp(r'[.!?\n]').allMatches(text)) {
+      if (match.start < relationIndex) {
+        start = match.end;
+      } else {
+        end = match.start;
+        break;
+      }
+    }
+    final sentence = text.substring(start, end);
+    return _relationshipEnded.firstMatch(sentence)?.group(0);
+  }
 
   /// Trims filler and rejects values that carry no meaning. Returns null when
   /// nothing worth storing is left.

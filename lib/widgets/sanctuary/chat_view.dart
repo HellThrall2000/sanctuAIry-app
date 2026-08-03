@@ -15,11 +15,13 @@ import '../../services/crisis_guard.dart';
 import '../../services/event_store.dart';
 import '../../services/guard.dart';
 import '../../services/litert_service.dart';
+import '../../services/memory_cache.dart';
 import '../../services/memory_store.dart';
 import '../../services/model_preference.dart';
 import '../../services/model_settings.dart';
 import '../../services/nudge_service.dart';
 import '../../services/persona.dart';
+import '../../services/quick_prompts.dart';
 import '../../services/relationship_log.dart';
 import '../../services/reply_sanitizer.dart';
 import '../../services/sentiment_analyzer.dart';
@@ -124,22 +126,6 @@ class _ChatViewState extends State<ChatView> {
 
   bool _isGenerating = false;
 
-  /// The three seed phrases offered above the composer.
-  static const _quickPrompts = <({String label, String text})>[
-    (
-      label: 'Deep Reflection',
-      text: "I'd like to sit with something that's been weighing on me...",
-    ),
-    (
-      label: 'Stream of Consciousness',
-      text:
-          "Let's write down my raw, unfiltered thoughts and see where they lead...",
-    ),
-    (
-      label: 'Focus on Wonder',
-      text: 'I want to notice something small and good today...',
-    ),
-  ];
 
   /// Openers from the last few replies. The runtime exposes no repetition
   /// penalty, so we discourage reuse in the prompt instead — without this the
@@ -172,10 +158,6 @@ class _ChatViewState extends State<ChatView> {
 
   final MemoryStore _memory = MemoryStore();
 
-  /// Cached personal facts, rendered for the prompt. Read once when the model
-  /// is initialised — see [MemoryStore] for why it is not refreshed mid-session.
-  String? _profileBlock;
-
   /// The turns actually sent to the model, in order.
   ///
   /// Deliberately separate from [_messages], which also holds the welcome
@@ -194,13 +176,11 @@ class _ChatViewState extends State<ChatView> {
   final EventStore _events = EventStore.instance;
   final RelationshipLog _relationship = RelationshipLog.instance;
   final NudgeService _nudges = NudgeService.instance;
+  final MemoryCache _cache = MemoryCache.instance;
 
   /// Screens the user's message in and the model's reply out. See [Guard] for
   /// why this is deterministic rather than a second classifier model.
   static const Guard _guard = LexicalGuard();
-
-  /// The relationship block, read once alongside [_profileBlock].
-  String? _relationshipBlock;
 
   /// How many past exchanges to prefill the model with when resuming.
   ///
@@ -383,44 +363,21 @@ class _ChatViewState extends State<ChatView> {
   /// replaced in P3/P4 by retrieval — see ROADMAP.md.
   String? _buildSystemInstruction() {
     final persona = Persona.instructionFor(_settings.profile);
-    if (persona == null &&
-        widget.allowedJournals.isEmpty &&
-        _profileBlock == null &&
-        _relationshipBlock == null) {
-      return null;
-    }
+
+    // One block, not four. Facts, diary, mood trend and past sessions used to
+    // arrive under four separate headings, which cost four preambles out of a
+    // 4096-token container and taught the model to cite its sources — asked
+    // "do I swim" it replied *"You mentioned swimming in your diary"*. It is
+    // all simply what the companion knows. See MemoryCache.knowledgeBlock.
+    final knowledge = _cache.knowledgeBlock();
+    if (persona == null && knowledge == null) return null;
 
     final buffer = StringBuffer(persona ?? '');
-
-    if (_profileBlock != null) {
+    if (knowledge != null) {
       buffer.writeln();
       buffer.writeln();
-      buffer.writeln(_profileBlock);
-    }
-
-    // How the relationship has been going, as distinct from what is known
-    // about the user. Fixed for the life of the conversation, like everything
-    // else here — see RelationshipLog.promptBlock for why it is phrased as
-    // observation rather than as instruction.
-    if (_relationshipBlock != null) {
-      buffer.writeln();
-      buffer.writeln();
-      buffer.writeln(_relationshipBlock);
-    }
-
-    if (widget.allowedJournals.isNotEmpty) {
-      buffer.writeln();
-      buffer.writeln();
-      buffer.writeln(
-        'The user unlocked these private journal entries and approved them '
-        'for this conversation:',
-      );
-      for (final entry in widget.allowedJournals) {
-        buffer.writeln();
-        buffer.writeln('Title: ${entry.title}');
-        buffer.writeln('Date: ${entry.date.split('T').first}');
-        buffer.writeln('Content: ${entry.content}');
-      }
+      buffer.writeln(knowledge);
+      _cache.markNotesSeen();
     }
 
     return buffer.toString();
@@ -546,8 +503,8 @@ class _ChatViewState extends State<ChatView> {
         // Both loaded before the instruction is built — this is the whole point
         // of the cache, that a new session starts already knowing the user and
         // already knowing how the two of them have been.
-        _profileBlock = await _memory.profileBlock();
-        _relationshipBlock = await _relationship.promptBlock();
+        // Already in memory — warmed at launch, so this costs nothing here.
+        await _cache.warm();
         final error = await _liteRtService.initializeModel(
           path: located.path,
           settings: _settings,
@@ -600,7 +557,20 @@ class _ChatViewState extends State<ChatView> {
     // where the news reverses — which is exactly how the companion came to
     // celebrate a job offer the user had just said they did not get.
     final cue = Persona.moodCue(mood);
+
+    // Diary entries shared *after* this conversation was created. The system
+    // instruction is fixed once the model starts, so an entry permitted
+    // mid-session has no other way in — which is precisely why the companion
+    // appeared to ignore notes the user had just given it access to. Carried
+    // once, on the next turn, then marked seen.
+    String? freshNotes;
+    if (_cache.hasUnseenNotes) {
+      freshNotes = _cache.knowledgeBlock();
+      _cache.markNotesSeen();
+    }
+
     final fullPrompt = [
+      if (freshNotes != null) freshNotes,
       if (episodic != null) episodic,
       if (recall != null) recall,
       if (cue != null) cue,
@@ -683,6 +653,9 @@ class _ChatViewState extends State<ChatView> {
     unawaited(() async {
       try {
         await _chunks.addExchange(userText: prompt, replyText: reply);
+        // Anything learned this turn becomes visible to the *next* conversation
+        // without another database read on the send path.
+        await _cache.refreshProfile();
         await _nudges.rearm();
       } catch (e) {
         debugPrint('Post-turn write failed: $e');
@@ -1084,7 +1057,7 @@ class _ChatViewState extends State<ChatView> {
         runSpacing: s.promptsGap,
         alignment: s.centerPrompts ? WrapAlignment.center : WrapAlignment.start,
         children: [
-          for (final p in _quickPrompts)
+          for (final p in QuickPrompt.all)
             OrganicTag(
               label: p.label,
               variant: OrganicTagVariant.outline,
