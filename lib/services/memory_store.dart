@@ -64,15 +64,27 @@ class MemoryStore {
     return facts;
   }
 
-  /// Re-derives everything this journal entry contributes.
+  /// Re-derives facts from [entry].
   ///
-  /// Old facts from the entry are deleted first, so editing a journal cannot
-  /// leave a stale fact behind. When [JournalEntry.allowAiAccess] is false this
-  /// deletes and stores nothing, which is how revoking permission takes effect
-  /// immediately rather than at some later rebuild.
+  /// **Withdrawing permission stops future sharing; it does not erase what was
+  /// already learned.** Sharing an entry teaches the companion something, and
+  /// once it knows, unticking a box does not make it not know — the same way
+  /// telling a friend something and then asking them to forget it does not
+  /// work. Pretending otherwise would be the dishonest option.
+  ///
+  /// So the only true erase is the deliberate one: "Forget all" in the memory
+  /// panel, or deleting the entry itself, both of which go through
+  /// [forgetSource]. The diary UI says exactly this rather than implying the
+  /// toggle is a delete.
+  ///
+  /// Keeping it also makes the cache stable: derived memory stops appearing and
+  /// disappearing as toggles move, which is what a retrieval layer needs.
   Future<List<MemoryFact>> syncJournal(JournalEntry entry) async {
-    await forgetSource(entry.id);
     if (!entry.allowAiAccess) return const [];
+
+    // Replaces this entry's previous facts rather than accumulating them, so
+    // editing an entry corrects what was learned from it.
+    await forgetSource(entry.id);
 
     final facts = FactExtractor.extract(
       '${entry.title}\n${entry.content}',
@@ -151,37 +163,14 @@ class MemoryStore {
   /// One line per recalled fact, for injecting into a single turn, or null when
   /// nothing is relevant.
   ///
-  /// Kept separate from [profileBlock] because it goes somewhere different: the
-  /// pinned block is part of the system instruction, fixed for the life of the
-  /// conversation, while this changes every turn and so has to ride along with
-  /// the user's message.
+  /// Kept separate from the pinned block that `MemoryCache` renders, because it
+  /// goes somewhere different: the pinned facts are part of the system
+  /// instruction, fixed for the life of the conversation, while this changes
+  /// every turn and so has to ride along with the user's message.
   Future<String?> recallBlock(String message) async {
     final facts = await recallFor(message);
     if (facts.isEmpty) return null;
     return '(You also remember: ${facts.map((f) => f.text).join(' ')})';
   }
 
-  /// The block appended to the system instruction, or null when nothing is
-  /// pinned yet.
-  Future<String?> profileBlock() async {
-    final selected = await pinnedFacts();
-    if (selected.isEmpty) return null;
-
-    final buffer = StringBuffer()
-      ..writeln('What you already know about the user:');
-    for (final f in selected) {
-      buffer.writeln('- ${f.text}');
-    }
-    // Wording matters here. An earlier version ended "do not mention that you
-    // have it written down", which read to the model as instruction to deny
-    // knowing any of it — asked "what is my name", it answered "I don't have
-    // access to your personal information". The intent was only to stop it
-    // reciting the list unprompted, so that is now all it says.
-    buffer.write(
-      'This is what you remember about them from earlier conversations. Treat it '
-      'as things you know. Use it naturally when it is relevant, and do not read '
-      'the list back to them.',
-    );
-    return buffer.toString();
-  }
 }

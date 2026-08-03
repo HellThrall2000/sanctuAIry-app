@@ -7,8 +7,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../models/journal_entry.dart';
 import '../../services/database_service.dart';
-import '../../services/chunk_store.dart';
-import '../../services/memory_store.dart';
+import '../../services/memory_cache.dart';
 import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
 import '../organic/organic.dart';
@@ -37,8 +36,7 @@ class _DiaryPanelState extends State<DiaryPanel> {
   static const _passcodeKey = 'sanctuary_diary_vault_code_hash';
 
   final DatabaseService _db = DatabaseService();
-  final MemoryStore _memory = MemoryStore();
-  final ChunkStore _chunks = ChunkStore.instance;
+  final MemoryCache _cache = MemoryCache.instance;
   final _uuid = const Uuid();
   final TextEditingController _passcodeController = TextEditingController();
 
@@ -117,12 +115,10 @@ class _DiaryPanelState extends State<DiaryPanel> {
   Future<void> _toggleAiAccess(JournalEntry entry) async {
     final updated = entry.copyWith(allowAiAccess: !entry.allowAiAccess);
     await _db.updateEntry(updated);
-    // Takes effect now, in both directions: granting access extracts facts,
-    // revoking it deletes them. Anything else would make the toggle a lie.
-    await _memory.syncJournal(updated);
-    // Facts and chunks are separate stores with the same permission rule, so
-    // both have to be told. Revoking access must erase what either derived.
-    await _chunks.syncJournal(updated);
+    // Granting takes effect immediately. Revoking stops future sharing but
+    // leaves what was already learned — see MemoryStore.syncJournal, and the
+    // tag copy below, which says so rather than implying a delete.
+    await _cache.onJournalChanged(updated);
     await _loadEntries();
   }
 
@@ -130,92 +126,29 @@ class _DiaryPanelState extends State<DiaryPanel> {
     await _db.deleteEntry(entry.id);
     // Deleting the entry must delete what was learned from it, or the companion
     // would keep knowing something the user believes they erased.
-    await _memory.forgetSource(entry.id);
-    await _chunks.removeSource(entry.id);
+    await _cache.onJournalDeleted(entry.id);
     await _loadEntries();
   }
 
   Future<void> _composeEntry() async {
-    final titleController = TextEditingController();
-    final contentController = TextEditingController();
-    var share = true;
-
-    final saved = await OrganicDialog.show<bool>(
+    final draft = await OrganicDialog.show<_EntryDraft>(
       context,
-      StatefulBuilder(
-        builder: (context, setModalState) => OrganicDialog(
-          title: 'New Entry',
-          body: 'Written to this device only.',
-          children: [
-            OrganicField(
-              label: 'Title',
-              child: OrganicInput(
-                controller: titleController,
-                hint: 'A name for this entry',
-              ),
-            ),
-            OrganicField(
-              label: 'Entry',
-              child: OrganicInput(
-                controller: contentController,
-                hint: 'What happened, and how it felt',
-                maxLines: 6,
-                minLines: 4,
-              ),
-            ),
-            // The design has no control for this, but writing an entry is
-            // exactly when the decision should be made, not afterwards.
-            Row(
-              children: [
-                OrganicTag(
-                  label: share ? 'Companion may read this' : 'Private to you',
-                  variant: share
-                      ? OrganicTagVariant.accent2
-                      : OrganicTagVariant.neutral,
-                  onTap: () => setModalState(() => share = !share),
-                ),
-              ],
-            ),
-          ],
-          actions: [
-            OrganicButton(
-              label: 'Cancel',
-              variant: OrganicButtonVariant.secondary,
-              onPressed: () => Navigator.of(context).pop(false),
-            ),
-            OrganicButton(
-              label: 'Save Entry',
-              onPressed: () => Navigator.of(context).pop(true),
-            ),
-          ],
-        ),
-      ),
+      const _ComposeEntryDialog(),
     );
-
-    if (saved != true) {
-      titleController.dispose();
-      contentController.dispose();
-      return;
-    }
-
-    final title = titleController.text.trim();
-    final content = contentController.text.trim();
-    titleController.dispose();
-    contentController.dispose();
-    if (title.isEmpty || content.isEmpty) return;
+    if (draft == null || !mounted) return;
+    if (draft.title.isEmpty || draft.content.isEmpty) return;
 
     final entry = JournalEntry(
       id: _uuid.v4(),
-      title: title,
-      content: content,
+      title: draft.title,
+      content: draft.content,
       date: DateTime.now().toUtc().toIso8601String(),
-      allowAiAccess: share,
+      allowAiAccess: draft.share,
     );
     await _db.insertEntry(entry);
-    // Only extracts when the entry permits AI access; syncJournal enforces that
+    // Only extracts when the entry permits AI access; the cache enforces that
     // rather than trusting each call site to check.
-    await _memory.syncJournal(entry);
-    await _chunks.syncJournal(entry);
+    await _cache.onJournalChanged(entry);
     await _loadEntries();
   }
 
@@ -341,15 +274,117 @@ class _DiaryPanelState extends State<DiaryPanel> {
         Row(
           children: [
             OrganicTag(
+              // "Private to you" was a lie the moment withdrawing permission
+              // stopped erasing what had already been learned. These say what
+              // the toggle actually does — the erase lives in What I Remember.
               label: entry.allowAiAccess
-                  ? 'Companion may read this'
-                  : 'Private to you',
+                  ? 'Shared with companion'
+                  : 'Not shared',
               variant: entry.allowAiAccess
                   ? OrganicTagVariant.accent2
                   : OrganicTagVariant.neutral,
               onTap: () => _toggleAiAccess(entry),
             ),
           ],
+        ),
+      ],
+    );
+  }
+}
+
+/// What the compose dialog returns.
+class _EntryDraft {
+  final String title;
+  final String content;
+  final bool share;
+
+  const _EntryDraft(this.title, this.content, this.share);
+}
+
+/// "New Entry", as a widget that owns its own controllers.
+///
+/// **Why this is not a `StatefulBuilder` any more.** It was, with the
+/// controllers created in `_composeEntry` and disposed as soon as the dialog's
+/// future completed. That future completes when the route is *popped*, not when
+/// it has finished animating out — so for the length of the 200 ms exit fade the
+/// `TextField`s were still mounted and still bound to controllers that had
+/// already been disposed. On device that surfaced as a red screen:
+/// `'_dependents.isEmpty': is not true`.
+///
+/// Owning the controllers here ties their lifetime to the widget's, so they are
+/// released when Flutter actually removes it — which is the only moment that is
+/// safe.
+class _ComposeEntryDialog extends StatefulWidget {
+  const _ComposeEntryDialog();
+
+  @override
+  State<_ComposeEntryDialog> createState() => _ComposeEntryDialogState();
+}
+
+class _ComposeEntryDialogState extends State<_ComposeEntryDialog> {
+  final _title = TextEditingController();
+  final _content = TextEditingController();
+  bool _share = true;
+
+  @override
+  void dispose() {
+    _title.dispose();
+    _content.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return OrganicDialog(
+      title: 'New Entry',
+      body: 'Written to this device only.',
+      children: [
+        OrganicField(
+          label: 'Title',
+          child: OrganicInput(
+            controller: _title,
+            hint: 'A name for this entry',
+          ),
+        ),
+        OrganicField(
+          label: 'Entry',
+          child: OrganicInput(
+            controller: _content,
+            hint: 'What happened, and how it felt',
+            maxLines: 6,
+            minLines: 4,
+          ),
+        ),
+        // The design has no control for this, but writing an entry is exactly
+        // when the decision should be made, not afterwards.
+        Row(
+          children: [
+            OrganicTag(
+              label: _share ? 'Share with companion' : 'Keep to yourself',
+              variant: _share
+                  ? OrganicTagVariant.accent2
+                  : OrganicTagVariant.neutral,
+              onTap: () => setState(() => _share = !_share),
+            ),
+          ],
+        ),
+      ],
+      actions: [
+        OrganicButton(
+          label: 'Cancel',
+          variant: OrganicButtonVariant.secondary,
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        OrganicButton(
+          label: 'Save Entry',
+          // Read here, while the controllers are certainly still alive.
+          onPressed: () => Navigator.of(context).pop(
+            _EntryDraft(
+              _title.text.trim(),
+              _content.text.trim(),
+              _share,
+            ),
+          ),
         ),
       ],
     );

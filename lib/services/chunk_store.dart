@@ -69,15 +69,54 @@ class ChunkStore {
     );
   }
 
+  /// Stores a condensed past session.
+  ///
+  /// Keyed by when the session ended, so closing the app repeatedly without
+  /// talking rewrites one row rather than accumulating near-identical copies.
+  Future<void> addSessionSummary({
+    required String text,
+    required DateTime endedAt,
+  }) async {
+    final db = await _database;
+    await db.insert(
+      'memory_chunk',
+      MemoryChunk(
+        id: 'session:${endedAt.toUtc().toIso8601String()}',
+        text: text,
+        source: ChunkSource.session,
+        createdAt: endedAt,
+      ).toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  /// The most recent session summaries, newest first.
+  ///
+  /// Carried in the system instruction so a returning user is not met by a
+  /// companion starting from nothing.
+  Future<List<MemoryChunk>> recentSessions({int limit = 3}) async {
+    final db = await _database;
+    final rows = await db.query(
+      'memory_chunk',
+      where: 'source = ?',
+      whereArgs: [ChunkSource.session.name],
+      orderBy: 'createdAt DESC',
+      limit: limit,
+    );
+    return rows.map(MemoryChunk.fromMap).toList(growable: false);
+  }
+
   /// Re-chunks a journal entry, replacing anything previously derived from it.
   ///
-  /// Permission is enforced here rather than at call sites, exactly as
-  /// `MemoryStore.syncJournal` does: revoking a diary's access has to erase
-  /// what was derived from it, and a call site that forgets to check would
-  /// leave the companion quietly able to quote a private entry.
+  /// Matches `MemoryStore.syncJournal`: withdrawing permission stops the entry
+  /// being re-read, but does not delete chunks already made from it. The two
+  /// stores have to agree, or a revoked entry would vanish from the profile
+  /// while still being quotable through retrieval — the worst of both.
+  ///
+  /// Erasing is deliberate and explicit: deleting the entry, or "Forget all".
   Future<void> syncJournal(JournalEntry entry) async {
-    await removeSource(entry.id);
     if (!entry.allowAiAccess) return;
+    await removeSource(entry.id);
 
     for (final piece in _split('${entry.title}. ${entry.content}')) {
       await _insert(

@@ -4,7 +4,11 @@ enum ChunkSource {
   chat,
 
   /// A paragraph of a journal entry the user shared with the companion.
-  journal;
+  journal,
+
+  /// A whole past session, condensed. Written when the app closes — see
+  /// `SessionSummarizer` for why the transcript cannot be replayed verbatim.
+  session;
 
   static ChunkSource fromName(String name) =>
       ChunkSource.values.firstWhere((s) => s.name == name, orElse: () => chat);

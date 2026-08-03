@@ -131,6 +131,13 @@ class Bm25Scorer implements MemoryScorer {
 
   /// Content words, shared with [DartBm25Scorer] so both rankers agree on what
   /// a term is.
+  /// Deliberately **not** stemmed. The FTS5 index is built with
+  /// `tokenize='porter'`, which stems the query as well as the index, so
+  /// passing raw words lets SQLite match `cheat` to `cheating` itself. Stemming
+  /// here first would hand porter a non-word — our [stem] turns "hiking" into
+  /// "hik" where porter produces "hike" — and the two would never meet.
+  ///
+  /// [DartBm25Scorer] has no porter and stems both sides itself.
   static List<String> terms_(String text) => text
       .toLowerCase()
       .replaceAll(RegExp(r"['’]"), '')
@@ -139,6 +146,38 @@ class Bm25Scorer implements MemoryScorer {
       .toSet()
       .take(12)
       .toList();
+
+  /// Crude suffix stripping, matching `FactRanker._stem`.
+  ///
+  /// **This was missing, and it hid a diary entry from its own owner.** The
+  /// entry said *"She was cheating on someone else"*; the user asked *"did she
+  /// cheat on me"*; `cheat` and `cheating` are different strings, the chunk
+  /// scored zero, and the companion answered that it did not know. `FactRanker`
+  /// has stemmed since it was written — the chunk scorer simply never did, so
+  /// the two halves of retrieval disagreed about what a word is.
+  ///
+  /// Applied to the index side as well as the query side, so both meet at the
+  /// same stem. Over-stemming costs a false match; under-stemming costs a
+  /// silent miss, which is far worse here.
+  static String stem(String word) {
+    var w = word;
+    if (w.length > 4 && w.endsWith('ies')) {
+      return '${w.substring(0, w.length - 3)}y';
+    }
+    if (w.length > 4 && w.endsWith('ing')) {
+      w = w.substring(0, w.length - 3);
+    } else if (w.length > 3 && w.endsWith('ed')) {
+      w = w.substring(0, w.length - 2);
+    } else if (w.length > 3 && w.endsWith('es')) {
+      w = w.substring(0, w.length - 2);
+    } else if (w.length > 3 && w.endsWith('s') && !w.endsWith('ss')) {
+      w = w.substring(0, w.length - 1);
+    }
+    // Makes hike/hiking and cheat/cheating agree: `-ing` removal yields "hik"
+    // and "cheat", so the bare form has to lose a trailing `e` to meet it.
+    if (w.length > 3 && w.endsWith('e')) w = w.substring(0, w.length - 1);
+    return w;
+  }
 }
 
 /// BM25 computed in Dart, for devices whose SQLite has no FTS5.
@@ -170,7 +209,9 @@ class DartBm25Scorer implements MemoryScorer {
 
   @override
   Future<List<ScoredChunk>> rank(String query, {int limit = 4}) async {
-    final queryTerms = Bm25Scorer.terms_(query);
+    // Stemmed, unlike the FTS5 path — there is no porter here to do it.
+    final queryTerms =
+        Bm25Scorer.terms_(query).map(Bm25Scorer.stem).toSet().toList();
     if (queryTerms.isEmpty) return const [];
 
     final db = await _db();
@@ -243,10 +284,13 @@ class DartBm25Scorer implements MemoryScorer {
 
   /// All tokens, including repeats — BM25 needs term frequency, so this
   /// deliberately does not deduplicate the way the query side does.
+  ///
+  /// Stemmed with the same function as the query, or the two sides never meet.
   static List<String> _tokenize(String text) => text
       .toLowerCase()
       .replaceAll(RegExp(r"['’]"), '')
       .split(RegExp(r'[^a-z0-9]+'))
       .where((w) => w.length > 2 && !Bm25Scorer._stopwords.contains(w))
+      .map(Bm25Scorer.stem)
       .toList(growable: false);
 }

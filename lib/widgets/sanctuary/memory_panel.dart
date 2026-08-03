@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../../models/memory_fact.dart';
+import '../../services/chunk_store.dart';
+import '../../services/memory_cache.dart';
 import '../../services/memory_store.dart';
+import '../../services/relationship_log.dart';
 import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
 import '../organic/organic.dart';
@@ -62,8 +65,10 @@ class _MemoryPanelState extends State<MemoryPanel> {
       context,
       OrganicDialog(
         title: 'Forget everything?',
-        body: 'The companion will start from nothing next time you talk to '
-            'it. Your journal entries are not affected.',
+        body: 'Everything the companion has learned — from chat and from diary '
+            'entries you shared — is erased, including anything it kept after '
+            'you stopped sharing an entry. This is the only true erase. Your '
+            'diary entries themselves are not affected.',
         actions: [
           OrganicButton(
             label: 'Cancel',
@@ -80,7 +85,15 @@ class _MemoryPanelState extends State<MemoryPanel> {
       ),
     );
     if (confirmed == true) {
+      // The true erase, so it has to reach every store that holds derived
+      // memory — facts, episodic chunks and the relationship log. Clearing only
+      // `memory_facts` used to leave the companion able to quote a diary entry
+      // through retrieval after the user had been told it forgot everything.
       await _memory.forgetAll();
+      await ChunkStore.instance.clear();
+      await RelationshipLog.instance.clear();
+      await MemoryCache.instance.reset();
+      await MemoryCache.instance.warm(force: true);
       await _load();
     }
   }

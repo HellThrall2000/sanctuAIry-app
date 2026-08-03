@@ -58,8 +58,14 @@ void main() {
       // No blocklist of verbs can be complete, so an uncapitalised bare word is
       // never taken as a name. "my therapist suggested" was the case that
       // caught this.
-      expect(factFor('my wife left me', 'relationship:wife')?.value, 'wife');
-      expect(factFor('my dad died last year', 'relationship:dad')?.value, 'dad');
+      //
+      // The examples deliberately avoid endings: "my wife left me" and "my dad
+      // died last year" used to live here, and both are now handled by the
+      // relationship-ending group below — recording a live wife for someone
+      // who has just said she left is the bug that group exists for.
+      expect(factFor('my wife loves gardening', 'relationship:wife')?.value,
+          'wife');
+      expect(factFor('my dad called me', 'relationship:dad')?.value, 'dad');
       expect(factFor('my boss wants a word', 'relationship:boss')?.value,
           'boss');
     });
@@ -158,6 +164,73 @@ void main() {
           source: FactSource.journal, sourceId: 'entry-1');
       expect(journal.single.source, FactSource.journal);
       expect(journal.single.sourceId, 'entry-1');
+    });
+  });
+
+  group('relationships that have ended', () {
+    test('"my girlfriend broke up with me" is not a current girlfriend', () {
+      // Measured on device: this exact sentence was stored as "They have a
+      // girlfriend.", and the companion later asked after a partner who had
+      // left. A wrong fact is worse than a missing one.
+      final facts = extract('My girlfriend broke up with me');
+      expect(
+        facts.where((f) => f.kind == FactKind.relationship),
+        isEmpty,
+        reason: facts.map((f) => f.text).join(' | '),
+      );
+    });
+
+    test('the ending itself is remembered', () {
+      final facts = extract('My girlfriend broke up with me');
+      expect(facts.map((f) => f.text).join(' '), contains('has ended'));
+    });
+
+    test('covers the ways people actually say it', () {
+      for (final line in [
+        'my wife left me last year',
+        'my husband and i are getting divorced',
+        'my partner passed away',
+        'me and my boyfriend split up',
+        'my ex-girlfriend called',
+        'my girlfriend dumped me',
+      ]) {
+        final relations = extract(line)
+            .where((f) => f.kind == FactKind.relationship);
+        expect(relations, isEmpty, reason: 'recorded a live relation from "$line"');
+      }
+    });
+
+    test('an ending in one sentence does not erase a relation in another', () {
+      // Document-wide checking would lose the sister.
+      final facts = extract(
+        'My girlfriend broke up with me. My sister has been really kind.',
+      );
+      final texts = facts.map((f) => f.text).join(' | ');
+      expect(texts, contains('sister'));
+      expect(texts, isNot(contains('They have a girlfriend')));
+    });
+
+    test('a pronoun is never a name', () {
+      // "called" is both a naming frame and an ordinary verb, so "my dad called
+      // me" was stored as "Their dad is called me."
+      expect(factFor('my dad called me', 'relationship:dad')?.value, 'dad');
+      expect(extract('my sister called me today').map((f) => f.text).join(' '),
+          isNot(contains('called me')));
+    });
+
+    test('bereavement is not worded as a breakup', () {
+      // This text is read back to someone who is grieving. "Their relationship
+      // with their dad has ended" is not an acceptable way to say he died.
+      final texts = extract('my dad died last year').map((f) => f.text).join(' ');
+      expect(texts, contains('lost their dad'));
+      expect(texts, isNot(contains('relationship with')));
+    });
+
+    test('ordinary mentions still record the relation', () {
+      final texts = extract('my sister is coming to visit')
+          .map((f) => f.text)
+          .join(' | ');
+      expect(texts, contains('sister'));
     });
   });
 }
