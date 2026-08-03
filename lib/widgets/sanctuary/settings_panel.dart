@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
 
+import '../../screens/model_setup_screen.dart';
 import '../../services/chat_store.dart';
+import '../../services/litert_service.dart';
 import '../../services/local_profile.dart';
 import '../../services/nudge_service.dart';
 import '../../services/soundscape_controller.dart';
 import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
 import '../organic/organic.dart';
-import 'memory_panel.dart';
 import 'signin_dialog.dart';
 
 /// "Sanctuary Controls" — profile, theme, and ambient sound.
@@ -48,6 +49,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
     _profile.addListener(_refresh);
     _sound.addListener(_refresh);
     _profile.load();
+    _checkModel();
     _nudges.load().then((_) {
       if (mounted) setState(() {});
     });
@@ -62,6 +64,28 @@ class _SettingsPanelState extends State<SettingsPanel> {
 
   void _refresh() {
     if (mounted) setState(() {});
+  }
+
+  /// Assumed present until proven otherwise, so the "finish setting up" card
+  /// does not flash into view for the overwhelming majority of users who
+  /// already have a model.
+  bool _modelInstalled = true;
+
+  Future<void> _checkModel() async {
+    final models = await LiteRtService().findLocalModels();
+    if (mounted) setState(() => _modelInstalled = models.isNotEmpty);
+  }
+
+  Future<void> _openModelSetup() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => ModelSetupScreen(
+          onReady: () => Navigator.of(context).maybePop(),
+          onDefer: () => Navigator.of(context).maybePop(),
+        ),
+      ),
+    );
+    await _checkModel();
   }
 
   Future<void> _openSignIn() async {
@@ -94,67 +118,46 @@ class _SettingsPanelState extends State<SettingsPanel> {
         const SizedBox(height: Organic.space2),
         _resonanceTags(t),
         const SizedBox(height: Organic.space4),
-        // Not in the handoff, which has three destinations and no room for a
-        // fourth. It is here because the companion builds a profile of the user
-        // from chat and diary, and an app that promises nothing leaves the
-        // device still owes them a way to see and delete what is on it.
-        const OrganicSectionLabel('Companion Memory'),
-        const SizedBox(height: Organic.space2),
-        OrganicCard(
-          children: [
-            const OrganicCardTitle('What I Remember', size: 13),
-            const OrganicCardBody(
-              'Everything the companion has picked up, and where it learned it.',
-            ),
-            OrganicButton(
-              label: 'Review & Forget',
-              variant: OrganicButtonVariant.secondary,
-              fontSize: 11,
-              block: true,
-              onPressed: () => MemoryPanel.open(context),
-            ),
-          ],
-        ),
-        const SizedBox(height: Organic.space4),
-        const OrganicSectionLabel('Check-ins'),
-        const SizedBox(height: Organic.space2),
-        _checkInCard(t),
-        const SizedBox(height: Organic.space4),
+        // Only appears when the model is missing. Once the companion is on the
+        // device this is dead weight in a panel that already scrolls.
+        if (!_modelInstalled) ...[
+          const OrganicSectionLabel('Companion'),
+          const SizedBox(height: Organic.space2),
+          OrganicCard(
+            children: [
+              const OrganicCardTitle('Finish setting up', size: 13),
+              const OrganicCardBody(
+                'The companion has not been downloaded yet.',
+              ),
+              OrganicButton(
+                label: 'Download the companion',
+                variant: OrganicButtonVariant.secondary,
+                fontSize: 11,
+                block: true,
+                onPressed: _openModelSetup,
+              ),
+            ],
+          ),
+          const SizedBox(height: Organic.space4),
+        ],
+        // "Companion Memory" (the What I Remember / Review & Forget card) and
+        // "Check-ins" (the nudge toggle) used to sit here and were removed from
+        // the UI deliberately — neither is presented as the user's decision.
+        //
+        // **Both subsystems are untouched and still running.** MemoryStore keeps
+        // learning and MemoryPanel still exists; NudgeService still schedules
+        // check-ins on its own settings. Only the controls are gone, so this is
+        // a presentation change, not a behaviour change. `MemoryPanel.open` and
+        // `NudgeService.setEnabled` are the entry points if either is ever
+        // surfaced again.
+        //
+        // Note that turning off check-ins remains possible at the OS level:
+        // Android's per-app notification settings still apply, which is the
+        // control that actually matters for an app that messages people
+        // unprompted.
         const OrganicSectionLabel('Conversation'),
         const SizedBox(height: Organic.space2),
         _conversationCard(t),
-      ],
-    );
-  }
-
-  /// Whether the companion may reach out after a long silence.
-  ///
-  /// Given its own section rather than buried, and switchable in one tap. An
-  /// app that messages people about their mental health has to make "stop"
-  /// trivially easy to find.
-  Widget _checkInCard(SanctuaryTokens t) {
-    return OrganicCard(
-      children: [
-        const OrganicCardTitle('Reach out to me', size: 13),
-        const OrganicCardBody(
-          'If we have not spoken for a few hours, I may send one message — '
-          'never more than one a day, and never overnight.',
-        ),
-        Row(
-          children: [
-            OrganicTag(
-              label: _nudges.enabled ? 'On' : 'Off',
-              variant: _nudges.enabled
-                  ? OrganicTagVariant.accent2
-                  : OrganicTagVariant.neutral,
-              onTap: () async {
-                await _nudges.setEnabled(!_nudges.enabled);
-                if (_nudges.enabled) await _nudges.rearm();
-                if (mounted) setState(() {});
-              },
-            ),
-          ],
-        ),
       ],
     );
   }
@@ -163,9 +166,12 @@ class _SettingsPanelState extends State<SettingsPanel> {
     return OrganicCard(
       children: [
         const OrganicCardTitle('Clear conversation', size: 13),
+        // Was "…clear that from What I Remember", which pointed at a card that
+        // no longer exists. It still says the two are separate, because the
+        // surprising half of this action is what it does *not* erase.
         const OrganicCardBody(
           'Erases what is on screen. What I remember about you is kept '
-          'separately — clear that from What I Remember.',
+          'separately and is not affected.',
         ),
         OrganicButton(
           label: 'Clear conversation',
@@ -258,7 +264,9 @@ class _SettingsPanelState extends State<SettingsPanel> {
           spacing: 6,
           runSpacing: 6,
           children: [
-            for (final scape in Soundscape.values)
+            // Only the loops with a file in the bundle. The others stay
+            // declared in the enum but out of sight until they ship.
+            for (final scape in Soundscape.available)
               OrganicTag(
                 label: scape.label,
                 variant: _sound.active == scape

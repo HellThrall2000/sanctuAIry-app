@@ -3,7 +3,8 @@
     "allow": [
       "WebSearch",
       "WebFetch(domain:ai.google.dev)",
-      "WebFetch(domain:developers.google.com)"
+      "WebFetch(domain:developers.google.com)",
+      "Bash(MSYS_NO_PATHCONV=1 C:/AndroidSDK/platform-tools/adb.exe shell dumpsys audio)"
     ]
   }
 }

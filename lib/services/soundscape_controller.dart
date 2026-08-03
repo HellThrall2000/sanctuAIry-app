@@ -1,16 +1,35 @@
 import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 
-/// One of the three ambient loops offered in "Environment Resonance".
+/// One of the ambient loops offered in "Environment Resonance".
 enum Soundscape {
-  rain('Rain', 'assets/audio/rain.mp3'),
-  resonance('Resonance', 'assets/audio/resonance.mp3'),
-  bells('Temple Bells', 'assets/audio/bells.mp3');
+  rain(
+    'Rain',
+    'assets/audio/Glass_and_Petrichor.mp3',
+    bundled: true,
+  ),
+
+  // Not shipped yet. Kept as declarations rather than deleted so that adding a
+  // file and flipping `bundled` is the whole change — [SoundscapeController]
+  // and the settings UI already handle any number of loops.
+  resonance('Resonance', 'assets/audio/resonance.ogg'),
+  bells('Temple Bells', 'assets/audio/bells.ogg');
 
   final String label;
   final String asset;
 
-  const Soundscape(this.label, this.asset);
+  /// Whether the audio file is actually in the bundle.
+  ///
+  /// Filtering the UI on this rather than listing every enum value is the
+  /// difference between a control that does nothing and a control that is not
+  /// there — an ambient tag that silently fails is worse than one absent.
+  final bool bundled;
+
+  const Soundscape(this.label, this.asset, {this.bundled = false});
+
+  /// The loops this build can actually play. What the settings panel renders.
+  static List<Soundscape> get available =>
+      values.where((s) => s.bundled).toList(growable: false);
 }
 
 /// Owns the ambient audio player.

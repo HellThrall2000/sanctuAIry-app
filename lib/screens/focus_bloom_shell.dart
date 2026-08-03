@@ -128,7 +128,7 @@ class _FocusBloomShellState extends State<FocusBloomShell> {
               fontSize: 20,
             ),
             const SizedBox(height: 6),
-            Text('Sanctuary', style: OrganicText.h4(t).copyWith(fontSize: 14)),
+            Text('sanctuAIry', style: OrganicText.h4(t).copyWith(fontSize: 14)),
             const SizedBox(height: 6),
             Text(
               'PRIVATE COMPANION',

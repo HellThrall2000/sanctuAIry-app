@@ -8,6 +8,7 @@ import 'package:uuid/uuid.dart';
 import '../../models/journal_entry.dart';
 import '../../services/database_service.dart';
 import '../../services/memory_cache.dart';
+import '../../services/usage_metrics.dart';
 import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
 import '../organic/organic.dart';
@@ -146,6 +147,9 @@ class _DiaryPanelState extends State<DiaryPanel> {
       allowAiAccess: draft.share,
     );
     await _db.insertEntry(entry);
+    // Counts that an entry was written. Not its title, not its text, not
+    // whether it was shared — see UsageMetrics.
+    UsageMetrics.instance.recordJournalEntry();
     // Only extracts when the entry permits AI access; the cache enforces that
     // rather than trusting each call site to check.
     await _cache.onJournalChanged(entry);

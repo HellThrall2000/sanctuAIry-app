@@ -144,7 +144,7 @@ class _WarmCompanionShellState extends State<WarmCompanionShell> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Sanctuary',
+                        'sanctuAIry',
                         style: OrganicText.h4(t).copyWith(fontSize: 15),
                       ),
                       const SizedBox(height: 2),

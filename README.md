@@ -42,13 +42,22 @@ two concurrent loads would double an already-marginal memory footprint.
 
 ## On-device model
 
-The model is **not** in this repository. It is pushed to the app's external files directory:
+The model is **not** in this repository.
+
+Shipped builds download it on first run — see [`ModelDownloadService`](lib/services/model_download_service.dart)
+and [docs/RELEASE.md](docs/RELEASE.md) for hosting it. For development you can still
+push one directly into the directory the downloader manages:
 
 ```bash
-adb push model.litertlm /sdcard/Android/data/com.example.sanctuary/files/model.litertlm
+adb push model.litertlm \
+  /sdcard/Android/data/com.sanctuairy.app/files/models/model.litertlm
 ```
 
-`findLocalModelFile()` checks that path first, then app documents, then `/sdcard/Download`.
+`findLocalModels()` checks that managed directory first, then the app's external
+files root, then documents and support. It also scans `/sdcard/Download` and
+`/sdcard` — but **only in debug builds**: scoped storage denies a release build
+access to shared storage it did not create, so a shipped app finds its model in
+the managed directory or not at all.
 
 ### What the current `.litertlm` actually contains
 
@@ -201,7 +210,7 @@ Sending any message (e.g. "hello") kills the app. It is *not* a Dart exception a
 native crash. Android's own process-exit record is unambiguous:
 
 ```
-$ adb shell dumpsys activity exit-info com.example.sanctuary
+$ adb shell dumpsys activity exit-info com.sanctuairy.app
   reason=3 (LOW_MEMORY)  importance=100  rss=6.4GB … 7.4GB
 ```
 
@@ -382,7 +391,7 @@ When the app disappears, check the exit reason first — it distinguishes an OOM
 real native crash:
 
 ```bash
-adb shell dumpsys activity exit-info com.example.sanctuary
+adb shell dumpsys activity exit-info com.sanctuairy.app
 ```
 
 ### Measuring model memory off-device
@@ -400,7 +409,7 @@ evictable but repacked weights are not.
 To watch memory climb in real time:
 
 ```bash
-adb shell "grep VmRSS /proc/$(adb shell pidof com.example.sanctuary)/status"
+adb shell "grep VmRSS /proc/$(adb shell pidof com.sanctuairy.app)/status"
 ```
 
 The LiteRT-LM engine logs under the `native`, `litert` and `tflite` tags. The
