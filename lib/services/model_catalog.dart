@@ -127,26 +127,23 @@ class ModelRelease {
 abstract final class ModelCatalog {
   /// The model a fresh install downloads.
   ///
-  /// Hosted on Hugging Face, public and ungated, so it downloads with no token
-  /// and no account. Verified against the live endpoint: an anonymous ranged GET
+  /// Hosted on Cloudflare R2, public, so it downloads with no token and no
+  /// account. Verified against the live endpoint: an anonymous ranged GET
   /// returns `206` with `content-range: bytes 0-99/2588147712`, which is what
   /// makes resume work.
   ///
-  /// **The size and hash were not guessed.** Both come from the repository's own
-  /// LFS metadata:
+  /// **The size and hash were not guessed.** Both were verified against the
+  /// local model before upload, and the uploaded object was then compared to it
+  /// byte for byte at three offsets. If you re-upload, re-measure **both**: the
+  /// size drives the free-space pre-flight check, and a stale hash would make
+  /// every download look corrupt and be deleted on arrival.
   ///
+  /// ```bash
+  /// stat -c%s gemma-4-E2B-it.litertlm
+  /// sha256sum gemma-4-E2B-it.litertlm
   /// ```
-  /// curl -s https://huggingface.co/api/models/Padmanava/gemma_4_mobile_project/tree/main/litert_v2
-  /// ```
-  ///
-  /// whose `lfs.oid` is a plain SHA-256 of the file contents — confirmed by
-  /// hashing a small LFS file and comparing. So the checksum below can be
-  /// re-derived at any time without downloading 2.4 GB. If you re-upload the
-  /// model, re-run that command and update **both** fields: the size drives the
-  /// free-space pre-flight check, and a stale hash would make every download
-  /// look corrupt.
   static const ModelRelease defaultModel = ModelRelease(
-    profileId: 'gemma4-e2b-stock',
+    profileId: 'stock-gemma4-e2b', // must equal ModelProfile.stock.id
     displayName: 'Gemma 4 E2B',
     // Cloudflare R2, public development URL. Verified anonymously: `206` with
     // `content-range: bytes 0-99/2588147712`, and byte-identical to the local

@@ -5,7 +5,7 @@ import 'package:sanctuary/services/model_download_service.dart';
 /// A stand-in for a properly configured release, so the tests do not depend on
 /// whoever is shipping having filled in ModelCatalog yet.
 const _configured = ModelRelease(
-  profileId: 'gemma4-e2b-stock',
+  profileId: 'stock-gemma4-e2b',
   displayName: 'Gemma 4 E2B',
   url: 'https://models.example.com/gemma-4-E2B-it.litertlm',
   fileName: 'gemma-4-E2B-it.litertlm',
@@ -102,7 +102,7 @@ void main() {
 
     test('catalog lookup is by profile id, so the download picks the persona',
         () {
-      expect(ModelCatalog.byProfileId('gemma4-e2b-stock'), isNotNull);
+      expect(ModelCatalog.byProfileId('stock-gemma4-e2b'), isNotNull);
       expect(ModelCatalog.byProfileId('not-a-model'), isNull);
     });
   });

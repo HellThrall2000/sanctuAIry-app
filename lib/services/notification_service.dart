@@ -17,6 +17,11 @@ class NotificationService {
   static const int _checkInId = 1;
   static const String _channelId = 'sanctuary_check_in';
 
+  /// A finished reply, on its own id and channel so silencing check-ins does
+  /// not also silence the answer to a question the user just asked.
+  static const int _replyId = 2;
+  static const String _replyChannelId = 'sanctuary_reply';
+
   final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
 
@@ -63,6 +68,27 @@ class NotificationService {
           android: AndroidInitializationSettings('@drawable/ic_notification'),
         ),
       );
+
+      // Ask the system what is actually granted, rather than remembering
+      // whether *this process* happened to call requestPermission().
+      //
+      // [_permitted] used to start false on every launch and only become true
+      // if [requestPermission] ran — so a user who had granted notifications
+      // weeks ago still got nothing until something re-asked. It silently
+      // suppressed the reply notification entirely: `POST_NOTIFICATIONS` read
+      // `granted=true` on device while the app refused to post, and the
+      // `sanctuary_reply` channel was never even created.
+      try {
+        final android = _plugin.resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
+        _permitted = await android?.areNotificationsEnabled() ?? false;
+      } catch (e) {
+        // Unknown is treated as permitted: the platform is the real gate and
+        // drops what is not allowed. Guessing "no" here is how the bug above
+        // happened.
+        debugPrint('Could not read notification permission: $e');
+        _permitted = true;
+      }
 
       final details = await _plugin.getNotificationAppLaunchDetails();
       if (details?.didNotificationLaunchApp ?? false) {
@@ -139,5 +165,51 @@ class NotificationService {
     await init();
     if (!_available) return;
     await _plugin.cancel(id: _checkInId);
+  }
+
+  /// Tells the user a reply arrived while they were not looking.
+  ///
+  /// Only used when generation finished with the app in the background. If they
+  /// are watching the conversation the reply simply appears, and notifying
+  /// about something already on screen is noise.
+  ///
+  /// Distinct from a check-in in both id and channel: a check-in is the
+  /// companion reaching out unprompted and is something a user might reasonably
+  /// switch off, whereas this is the answer to a question they asked thirty
+  /// seconds ago. Sharing a channel would mean silencing one silences the
+  /// other.
+  Future<void> showReply(String text) async {
+    await init();
+    if (!_available || !_permitted) return;
+
+    // The reply itself, trimmed. Showing the real words is the point — a
+    // "you have a new message" placeholder would make them open the app to
+    // learn nothing.
+    final body = text.trim().replaceAll(RegExp(r'\s+'), ' ');
+    final preview = body.length <= 240 ? body : '${body.substring(0, 239)}…';
+
+    await _plugin.show(
+      id: _replyId,
+      title: 'sanctuAIry',
+      body: preview,
+      notificationDetails: NotificationDetails(
+        android: AndroidNotificationDetails(
+          _replyChannelId,
+          'Replies',
+          channelDescription:
+              'Shown when your companion finishes a reply while the app is '
+              'closed.',
+          importance: Importance.defaultImportance,
+          priority: Priority.defaultPriority,
+          styleInformation: BigTextStyleInformation(preview),
+        ),
+      ),
+    );
+  }
+
+  Future<void> cancelReply() async {
+    await init();
+    if (!_available) return;
+    await _plugin.cancel(id: _replyId);
   }
 }

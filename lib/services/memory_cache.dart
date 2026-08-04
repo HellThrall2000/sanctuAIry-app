@@ -87,6 +87,23 @@ class MemoryCache extends ChangeNotifier {
       // it. Without this, permission granted to an entry written before the
       // chunk store existed never produced anything, and the toggle looked
       // like it did nothing.
+      // Clear false memories the companion wrote about the user before
+      // ChunkStore stopped storing its own replies. One of these on the test
+      // device asserted a sister's name that was never given, and it was being
+      // retrieved and repeated as fact every time the subject came up.
+      final purged = await _chunks.purgeGeneratedChunks();
+      if (purged > 0) {
+        debugPrint('Purged $purged episodic chunks containing generated text.');
+      }
+
+      // Collapse chunks stored before insertion became content-addressed. A
+      // sentence said five times was five rows, and retrieval could hand the
+      // model three copies of it in one prompt.
+      final dupes = await _chunks.purgeDuplicateChunks();
+      if (dupes > 0) {
+        debugPrint('Collapsed $dupes duplicate episodic chunks.');
+      }
+
       await backfillJournals();
       await _reloadAll();
       _warm = true;

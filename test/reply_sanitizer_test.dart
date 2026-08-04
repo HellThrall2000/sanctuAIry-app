@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sanctuary/services/reply_sanitizer.dart';
 
 void main() {
+  _stressRegressions();
   group('ReplySanitizer.clean', () {
     test('repairs the observed _comma_ artifact', () {
       // Verbatim from the fine-tune, seed 2.
@@ -117,6 +118,84 @@ void main() {
 
     test('is empty for text with no words', () {
       expect(ReplySanitizer.sentenceKeys('   '), isEmpty);
+    });
+  });
+}
+
+/// Regressions from the on-device stress run of 4 August 2026, where a long
+/// emotional conversation produced a companion turn containing the single
+/// character "I", and a tester's screenshot showed a bubble reading `<|audio>`.
+void _stressRegressions() {
+  group('control tokens never reach the screen', () {
+    test('a bare control token is removed', () {
+      // Observed on device: the model emitted this as visible text.
+      expect(ReplySanitizer.clean('<|audio>'), '');
+      expect(ReplySanitizer.clean('I hear you. <|audio> Tell me more.'),
+          'I hear you. Tell me more.');
+    });
+
+    test('every shape in this vocabulary is covered', () {
+      for (final token in [
+        '<|audio|>',
+        '<|image|>',
+        '<|think|>',
+        '<channel|>',
+        '<|channel>',
+        '<|tool_call|>',
+        '<|turn>',
+        '<turn|>',
+      ]) {
+        expect(ReplySanitizer.clean('okay $token fine'), 'okay fine',
+            reason: token);
+      }
+    });
+
+    test('ordinary prose containing angle brackets survives', () {
+      // The guard must not eat arithmetic or emoticons.
+      expect(ReplySanitizer.clean('2 < 3 and 5 > 4'), '2 < 3 and 5 > 4');
+    });
+
+    test('a half-arrived token is withheld while streaming', () {
+      expect(ReplySanitizer.clean('Thanks <|au', streaming: true), 'Thanks');
+    });
+  });
+
+  group('markdown emphasis is unwrapped, not shown', () {
+    test('the bubbles render plain text, so asterisks would be visible', () {
+      // Both observed in the stress run.
+      expect(ReplySanitizer.clean('being *fully* spent'), 'being fully spent');
+      expect(ReplySanitizer.clean('**I get it** now'), 'I get it now');
+    });
+
+    test('arithmetic and stray asterisks are left alone', () {
+      expect(ReplySanitizer.clean('2 * 3 * 4'), '2 * 3 * 4');
+      expect(ReplySanitizer.clean('a lone * here'), 'a lone * here');
+    });
+  });
+
+  group('a reply stripped down to nothing is not usable', () {
+    test('the exact failure: everything was padding', () {
+      // The model padded to reach a sentence count by repeating; the repeat
+      // guard removed the padding and left one word.
+      final r = ReplySanitizer.cleanDetailed(
+        'I am here. I am here. I am here. I am here.',
+      );
+      expect(r.droppedSentences, greaterThan(0));
+      expect(r.isUsable, isFalse,
+          reason: 'a lone short sentence is a fragment, not an answer');
+    });
+
+    test('a single character is never usable', () {
+      expect(ReplySanitizer.cleanDetailed('I').isUsable, isFalse);
+    });
+
+    test('a real reply is usable', () {
+      expect(
+        ReplySanitizer.cleanDetailed(
+          'That sounds exhausting. I am glad you said it out loud.',
+        ).isUsable,
+        isTrue,
+      );
     });
   });
 }
