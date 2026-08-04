@@ -143,6 +143,10 @@ desktop.ini
 .agents/
 .gemini/
 scratch/
-# Shared project config (.claude/settings.json) IS committed;
-# only personal overrides are ignored.
-.claude/settings.local.json
+# Assistant tooling config, all of it. This used to commit
+# .claude/settings.json as "shared project config" and ignore only the personal
+# overrides — but none of it describes the app, it differs per machine and per
+# person, and the local file has already accumulated absolute Windows paths and
+# device-specific adb commands. Keeping the whole directory out is simpler than
+# maintaining the split.
+.claude/

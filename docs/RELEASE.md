@@ -311,6 +311,52 @@ structural rather than a promise — `UsageMetrics` has no method that accepts
 user text. See the comments in
 [`lib/services/usage_metrics.dart`](../lib/services/usage_metrics.dart).
 
+### Foreground service — this one needs written justification
+
+The app declares a **`specialUse`** foreground service
+([`GenerationService.kt`](../android/app/src/main/kotlin/com/sanctuairy/app/GenerationService.kt)).
+Play asks you to justify that type in the console, and a blank or vague answer
+is a rejection. Paste something close to this:
+
+> sanctuAIry runs a language model entirely on the user's device. When the user
+> sends a message, the reply is computed locally on the CPU and takes roughly
+> 15–30 seconds in the foreground and up to 90 seconds when backgrounded. The
+> foreground service exists solely to let that reply finish if the user leaves
+> the app, and stops itself the moment it completes. No network request is made
+> and no data leaves the device. There is no predefined foreground service type
+> for local model inference.
+
+**Why not one of the standard types.** Both alternatives were tried or
+considered and rejected on the evidence:
+
+| Type | Why not |
+| --- | --- |
+| `shortService` | **Measured failure.** Capped at ~3 minutes and then force-stopped. A backgrounded reply took 180 s on the test device; one run finished, the next crossed the ceiling, `onTimeout` fired, and the process was reclaimed mid-generation — losing the reply. Logs showed `VM exiting with result code 0`. |
+| `dataSync` | Would likely pass review with less scrutiny, and is what several on-device AI apps use. But nothing is being synced or transferred, so it is a false declaration — and a false declaration is a worse position to be in at review than an honest one that needs explaining. |
+
+**If Play rejects `specialUse`**, the fallback order is: (1) reply with the
+justification above and a link to the source file; (2) if still refused, switch
+to `dataSync` and accept the inaccuracy; (3) as a last resort drop the service
+entirely — the app still works, because an unanswered message is detected and
+answered on next launch (`_answerUnansweredMessage`). Option 3 costs users a
+reply whenever they switch away mid-generation, which is common.
+
+### Permissions, and what each is for
+
+Expect to be asked about these; none are in Play's restricted set.
+
+| Permission | Used for |
+| --- | --- |
+| `INTERNET` | The one-time model download, and Google sign-in |
+| `ACCESS_NETWORK_STATE` | Wi-Fi-only default for a 2.4 GB download |
+| `WAKE_LOCK` | Held during generation so the CPU does not idle mid-reply |
+| `FOREGROUND_SERVICE` + `..._SPECIAL_USE` | Finishing a reply after the user leaves — see above |
+| `POST_NOTIFICATIONS` | Check-ins, and telling the user a reply arrived while they were away |
+| `RECEIVE_BOOT_COMPLETED` | So a pending check-in survives a reboot |
+
+`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` was **removed** — it was declared but
+never called, and it *is* on Play's restricted list.
+
 ### Everything else
 
 - **Privacy policy URL** — mandatory. Publish [`docs/PRIVACY.md`](PRIVACY.md)
@@ -362,5 +408,6 @@ Worth being clear that this is a port, not a checkbox:
 - [ ] Privacy policy published and URL pasted into the console
 - [ ] Data safety form filled per the table above
 - [ ] Health apps declaration completed
+- [ ] `specialUse` foreground service justified in the console (text above)
 - [ ] Release build installed and tested on a real device, including a cold
       first-run download

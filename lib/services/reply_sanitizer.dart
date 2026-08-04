@@ -9,6 +9,13 @@ class SanitizedReply {
   final int droppedSentences;
 
   const SanitizedReply(this.text, this.droppedSentences);
+
+  /// Whether what survived sanitising is long enough to be an answer.
+  ///
+  /// False means the reply was almost entirely padding that the repeat guard
+  /// removed — on device this produced a companion turn reading `"I"`. The
+  /// caller regenerates rather than showing the fragment.
+  bool get isUsable => text.trim().length >= ReplySanitizer.minUsableLength;
 }
 
 /// Repairs text artifacts baked into the fine-tune by its training data, and
@@ -66,6 +73,45 @@ class ReplySanitizer {
   /// where the punctuation should be is substituted back in.
   static final RegExp _spaceBeforePunctuation = RegExp(r'\s+([,.;:!?])');
 
+  /// The model's own control tokens, when they arrive as visible text.
+  ///
+  /// These are real vocabulary entries — `<|turn>`, `<turn|>`, `<|audio|>`,
+  /// `<|image|>`, `<|think|>`, `<channel|>`, `<|tool_call|>` and friends — and
+  /// the runtime normally consumes them. Normally. A tester's screenshot shows a
+  /// chat bubble containing the literal text `<|audio>`, so a control token
+  /// reaching the screen is not hypothetical, and nothing here used to stop it.
+  ///
+  /// Deliberately broad: it matches any `<|…>` or `<…|>` form rather than an
+  /// enumerated list, because the interesting case is the token nobody thought
+  /// to enumerate. Ordinary prose does not contain `<|` — a user typing an
+  /// emoticon or a comparison never produces the pipe-and-angle pairing.
+  static final RegExp _controlToken = RegExp(r'<\|[^<>]*\|?>|<[^<>]*\|>');
+
+  /// Collapses whitespace left where a control token was removed.
+  static final RegExp _runOfSpaces = RegExp(r'[ \t]{2,}');
+
+  /// Markdown emphasis, unwrapped to the words inside it.
+  ///
+  /// The bubbles render plain text, so `*fully*` and `**I get it**` arrive on
+  /// screen with their asterisks showing — both observed in the stress run. The
+  /// persona already forbids headings and bullet lists; emphasis slips through
+  /// because it is inline.
+  ///
+  /// Requires a non-space, non-asterisk character adjacent to each marker, so
+  /// `2 * 3 * 4` and a lone `*` are untouched — only a genuine wrapped span
+  /// matches.
+  static final RegExp _emphasis =
+      RegExp(r'(\*{1,2})(?!\s)([^*\n]+?)(?<!\s)\1');
+
+  /// Shortest reply worth showing.
+  ///
+  /// Below this, sanitising has removed so much that what remains is not an
+  /// answer — the stress run surfaced a companion turn whose entire content was
+  /// `"I"`. Matches the floor `LexicalGuard` already applies for the same
+  /// reason. Callers use [SanitizedReply.isUsable] to regenerate instead of
+  /// showing a fragment.
+  static const int minUsableLength = 15;
+
   /// Splits after `.`, `!` or `?` without consuming the mark.
   static final RegExp _sentenceBreak = RegExp(r'(?<=[.!?])\s+');
 
@@ -100,10 +146,18 @@ class ReplySanitizer {
     _escapes.forEach((token, replacement) {
       text = text.replaceAll(token, replacement);
     });
+
+    // Before anything else: a control token is never content, and leaving one in
+    // would let it be counted as part of a "sentence" below.
+    text = text.replaceAll(_controlToken, ' ');
+    text = text.replaceAllMapped(_emphasis, (m) => m[2]!);
+    text = text.replaceAll(_runOfSpaces, ' ');
+
     text = text.replaceAllMapped(_spaceBeforePunctuation, (m) => m[1]!);
     if (streaming) text = _withoutPartialEscape(text);
+    if (streaming) text = _withoutPartialControlToken(text);
 
-    return _dropRepeatedSentences(text, streaming: streaming);
+    return _dropRepeatedSentences(text.trim(), streaming: streaming);
   }
 
   /// Keeps the first occurrence of each sentence and drops later verbatim
@@ -198,6 +252,19 @@ class ReplySanitizer {
       .replaceAll(RegExp(r"[^a-z0-9\s]"), '')
       .replaceAll(RegExp(r'\s+'), ' ')
       .trim();
+
+  /// Drops a trailing half-arrived control token, e.g. `"…thanks <|au"`.
+  ///
+  /// Same reasoning as [_withoutPartialEscape]: a chunk boundary can land inside
+  /// a token, and without this the user watches `<|au` appear and then rewrite
+  /// itself once the rest arrives.
+  static String _withoutPartialControlToken(String text) {
+    final start = text.lastIndexOf('<');
+    if (start == -1) return text;
+    // A complete token has already been removed above, so a surviving '<' with
+    // no '>' after it is an unfinished one.
+    return text.indexOf('>', start) == -1 ? text.substring(0, start) : text;
+  }
 
   /// Drops a trailing `_`-prefixed fragment that is still a viable prefix of a
   /// known escape, e.g. `"Oh no_com"`. A trailing `_` on its own counts.

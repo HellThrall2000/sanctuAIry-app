@@ -99,8 +99,14 @@ abstract final class SessionSummarizer {
     // reliable proxy for substance, and they are quoted rather than paraphrased.
     // Unedited quick-prompt seeds are the app's words, not the user's, and
     // they are long enough to win on length every time.
+    // Deduplicated first. A user who repeats themselves — or a test harness
+    // that replays the same message — otherwise fills all three quote slots
+    // with one sentence, and these summaries are carried in the system
+    // instruction where every token is taken from the conversation.
+    final seen = <String>{};
     final quoted = userTurns
         .where((m) => !QuickPrompt.isSeed(m.text))
+        .where((m) => seen.add(_dedupeKey(m.text)))
         .toList()
       ..sort((a, b) => b.text.length.compareTo(a.text.length));
     final lines = quoted
@@ -129,6 +135,69 @@ abstract final class SessionSummarizer {
     }
     return buffer.toString();
   }
+
+  /// Condenses turns being dropped from a **live** conversation that has filled
+  /// the context window.
+  ///
+  /// **Why this is not just deletion.** When the window fills, older exchanges
+  /// have to leave — but dropping them outright means the companion forgets, in
+  /// the middle of a conversation, something the user said ten minutes ago.
+  /// Compacting keeps the substance and pays only a few dozen tokens for it,
+  /// which is what an agentic system's auto-compaction does and what this was
+  /// missing.
+  ///
+  /// The retrieval layer is a *different* safety net: dropped turns also live in
+  /// `ChunkStore` and can come back if a later message happens to match them.
+  /// That is lossy in a way this is not — retrieval only fires on a lexical
+  /// match, so it cannot be relied on to carry the thread of the conversation
+  /// currently being had.
+  ///
+  /// Extractive, like the rest of this class: a generation pass to summarise
+  /// would cost another 15–30 seconds in the middle of someone's sentence, and
+  /// asking a 2B model to compress a conversation is where invention starts.
+  ///
+  /// Returns null when there is nothing worth carrying.
+  static String? compact(List<String> userTurns) {
+    final seen = <String>{};
+    final substantive = userTurns
+        .map((t) => t.trim())
+        .where((t) => t.length >= 15 && !QuickPrompt.isSeed(t))
+        .where((t) => seen.add(_dedupeKey(t)))
+        .toList();
+    if (substantive.isEmpty) return null;
+
+    final topics = <String>{};
+    for (final turn in substantive) {
+      topics.addAll(TopicExtractor.extract(turn));
+    }
+
+    // Longest turns as a proxy for substance — the same crude, reliable rule
+    // the session summary uses — then restored to the order they were said so
+    // the result reads as a conversation rather than a ranking.
+    final ranked = List<String>.from(substantive)
+      ..sort((a, b) => b.length.compareTo(a.length));
+    final chosen = ranked.take(maxQuotedLines).toSet();
+    final lines = substantive.where(chosen.contains).toList();
+
+    final buffer = StringBuffer('Earlier in this conversation');
+    if (topics.isNotEmpty) {
+      buffer.write(', they talked about ${topics.join(', ')}');
+    }
+    buffer.write('.');
+    for (final line in lines) {
+      buffer.writeln();
+      buffer.write('They said: ${_trim(line)}');
+    }
+    return buffer.toString();
+  }
+
+  /// Comparison form for spotting a line already quoted — case and punctuation
+  /// insensitive, so trailing punctuation does not make a repeat look new.
+  static String _dedupeKey(String text) => text
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9\s]'), '')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
 
   static String _trim(String text) {
     final t = text.trim().replaceAll(RegExp(r'\s+'), ' ');

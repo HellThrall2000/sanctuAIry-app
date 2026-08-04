@@ -147,13 +147,35 @@ class Persona {
       'Answer the message in front of you, not the one before it. If they take '
       'something back or the news turns, turn with them immediately — never '
       'celebrate something they have just told you did not happen.\n'
-      'Never invent details about their life, and never claim to have "heard" '
-      'anything from anywhere else. But anything written above — what you '
-      'remember about them, their past conversations, their diary entries — '
-      'they told you themselves, so treat it as known and answer from it '
-      'directly. Saying you do not know something that is written there is '
-      'its own kind of wrong.';
+      'Anything written above — what you remember about them, their past '
+      'conversations, their diary entries — they told you themselves, so treat '
+      'it as known and answer from it directly rather than saying you are not '
+      'sure.\n'
+      'If they ask you something that is not written above, say plainly that '
+      'you do not remember. Never invent a name, a date or a detail to fill '
+      'the gap, and never claim to have "heard" anything from anywhere else. '
+      'Forgetting is ordinary; making something up is not.';
 
+  /// **Why the last two sentences are ordered that way.** They used to read
+  /// "Never invent details… **But** anything written above… Saying you do not
+  /// know something that is written there is its own kind of wrong." The
+  /// anti-invention rule came first and was then undercut by a longer, more
+  /// emphatic counter-clause ending the paragraph — and a small model weights
+  /// the last thing it read.
+  ///
+  /// Measured on device: asked "tell me one thing I mentioned about my sister"
+  /// when the only stored fact was *"They have a sister"*, the companion
+  /// answered **"your sister's name is Last"** — invented, apparently from the
+  /// phrase "my sister called last week" earlier in the conversation. The same
+  /// failure produced a fabricated first name for a tester.
+  ///
+  /// The rewrite covers the case the old wording left out. It had a rule for
+  /// *what is written* and a rule for *inventing*, but none for **being asked
+  /// something genuinely absent** — so the model, told not to plead ignorance,
+  /// filled the gap. This is the third time on this project that a prompt
+  /// clause has been obeyed harder than intended; the lesson keeps being that a
+  /// permitted action becomes a quota.
+  ///
   /// A one-line note on how the user sounds in *this* message, or null when
   /// nothing is clearly signalled.
   ///

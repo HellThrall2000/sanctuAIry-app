@@ -88,9 +88,20 @@ class ModelProfile {
     label: 'Gemma 4 E2B (stock)',
     fileNamePatterns: ['gemma-4-e2b', 'gemma4-e2b', 'gemma_4_e2b'],
     personaMode: PersonaMode.full,
+    // **No sentence count.** This used to read "often one or two sentences,
+    // four at the very most", and a quota is the one thing this model reliably
+    // obeys the wrong way: given a number it pads to reach it by repeating a
+    // sentence. `ReplySanitizer` then strips the repeats, and when almost all of
+    // a reply was padding almost nothing survives — the stress run produced a
+    // reply consisting of the single character "I".
+    //
+    // That failure was already known here: [fineTune] carries
+    // `lengthGuidance: null` for exactly this reason. It turns out not to be a
+    // property of the fine-tune. Describing the register instead of counting
+    // sentences gets short replies without giving the model a target to pad to.
     lengthGuidance:
-        'Keep it short, the length of a text message — often one or two '
-        'sentences, four at the very most. Never use headings or bullet lists.',
+        'Write the way you would text a friend — unhurried, and no longer than '
+        'you need to be. Never use headings or bullet lists.',
     repairsOutput: false,
     temperature: 1.0,
     topK: 64,

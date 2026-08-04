@@ -78,8 +78,41 @@ void main() {
       // something in an app whose whole premise is that nothing reaches it from
       // outside the device. Being funny gives a small model licence to invent,
       // so the licence has to be withdrawn explicitly.
+      //
+      // The wording moved after a second, opposite failure: asked to recall
+      // something about the user's sister when the only stored fact was "They
+      // have a sister", the companion answered "your sister's name is Last" —
+      // invented from "my sister called last week" earlier in the conversation.
+      // The rule had been stated first and then undercut by a longer clause
+      // telling it not to plead ignorance, and the model weighted the last
+      // thing it read. So this asserts the *intent* rather than one sentence.
       final instruction = Persona.instructionFor(ModelProfile.stock)!;
-      expect(instruction, contains('Never invent details about their life'));
+      expect(instruction, contains('Never invent'));
+      expect(instruction, contains('never claim to have "heard"'));
+    });
+
+    test('stock is told what to do when it does not know', () {
+      // The gap that produced the invented name: there was a rule for what is
+      // written down and a rule against inventing, but none for being asked
+      // something genuinely absent. Given no third option, the model filled the
+      // gap rather than admitting it.
+      final instruction = Persona.instructionFor(ModelProfile.stock)!;
+      expect(instruction, contains('not written above'));
+      expect(instruction.toLowerCase(), contains('do not remember'));
+    });
+
+    test('the anti-invention rule is not undercut by what follows it', () {
+      // Ordering matters to a 2B model: the previous text put "Never invent"
+      // before a "But…" clause that ended the paragraph, and the counter-clause
+      // won. Nothing after the rule may soften it.
+      final instruction = Persona.instructionFor(ModelProfile.stock)!;
+      final afterRule =
+          instruction.substring(instruction.indexOf('Never invent'));
+      expect(afterRule, isNot(contains('But ')));
+      expect(
+        afterRule.toLowerCase(),
+        isNot(contains('is its own kind of wrong')),
+      );
     });
 
     test('stock is told to sound like a friend, not a clinician', () {

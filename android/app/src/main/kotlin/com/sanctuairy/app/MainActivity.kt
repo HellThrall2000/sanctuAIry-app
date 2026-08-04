@@ -12,6 +12,7 @@ import java.io.File
 class MainActivity: FlutterActivity() {
     private val WAKELOCK_CHANNEL = "sanctuary/wakelock"
     private val STORAGE_CHANNEL = "sanctuary/storage"
+    private val GENERATION_CHANNEL = "sanctuary/generation"
     private var wakeLock: PowerManager.WakeLock? = null
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
@@ -47,6 +48,30 @@ class MainActivity: FlutterActivity() {
                         }
                     }
                     else -> result.notImplemented()
+                }
+            }
+
+        // Keeps the process alive while a reply is being written, so switching
+        // away mid-generation no longer throws the reply away.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, GENERATION_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                try {
+                    when (call.method) {
+                        "begin" -> {
+                            GenerationService.start(this)
+                            result.success(true)
+                        }
+                        "end" -> {
+                            GenerationService.stop(this)
+                            result.success(true)
+                        }
+                        else -> result.notImplemented()
+                    }
+                } catch (e: Exception) {
+                    // A failure to start the service must never stop a reply
+                    // being generated — it only means the reply is at risk if
+                    // the user leaves, which is the behaviour we had before.
+                    result.error("GENERATION_SERVICE_ERROR", e.message, null)
                 }
             }
 

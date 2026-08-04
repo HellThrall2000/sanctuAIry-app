@@ -9,8 +9,10 @@ import '../../models/chat_message.dart';
 import '../../models/journal_entry.dart';
 import '../../models/memory_fact.dart';
 import '../../models/sentiment.dart';
+import '../../services/background_generation.dart';
 import '../../services/chat_store.dart';
 import '../../services/chunk_store.dart';
+import '../../services/context_budget.dart';
 import '../../services/crisis_guard.dart';
 import '../../services/event_store.dart';
 import '../../services/guard.dart';
@@ -19,12 +21,14 @@ import '../../services/memory_cache.dart';
 import '../../services/memory_store.dart';
 import '../../services/model_preference.dart';
 import '../../services/model_settings.dart';
+import '../../services/notification_service.dart';
 import '../../services/nudge_service.dart';
 import '../../services/persona.dart';
 import '../../services/quick_prompts.dart';
 import '../../services/relationship_log.dart';
 import '../../services/reply_sanitizer.dart';
 import '../../services/sentiment_analyzer.dart';
+import '../../services/session_summarizer.dart';
 import '../../services/topic_extractor.dart';
 import '../../services/usage_metrics.dart';
 import '../../theme/tokens.dart';
@@ -257,7 +261,37 @@ class _ChatViewState extends State<ChatView> {
     });
     _scrollToBottom();
 
+    await _answerUnansweredMessage();
     await _deliverPendingNudge();
+  }
+
+  /// Answers the last message if the app closed before the reply arrived.
+  ///
+  /// **Every message gets a reply, without exception.** Generation takes 15–30
+  /// seconds, and anything can happen in that window: the user switches apps,
+  /// the screen locks, Android reclaims the process for memory — which, with a
+  /// 2.5 GB model resident, it does readily. The reply was lost and nothing
+  /// ever retried, so the message sat on a single grey tick permanently and the
+  /// conversation had a hole in it.
+  ///
+  /// [_withDerivedDelivery] already *detects* this — a trailing user turn with
+  /// nothing after it is marked `sent` rather than `read` — so the state was
+  /// visible on screen and simply never acted on. This acts on it.
+  ///
+  /// Deliberately runs before the nudge check: answering what the user actually
+  /// said comes before the companion volunteering something new.
+  Future<void> _answerUnansweredMessage() async {
+    if (_messages.isEmpty || _isGenerating) return;
+
+    final last = _messages.last;
+    if (!last.isUser || last.delivery == MessageDelivery.read) return;
+
+    // Re-read rather than trusting the stored value: mood is cheap, lexical,
+    // and a message restored from an older build may predate the column.
+    final mood = last.mood ?? SentimentAnalyzer.read(last.text);
+
+    setState(() => _isGenerating = true);
+    await _respondTo(last, mood);
   }
 
   /// Shows a check-in if the user has been away long enough to warrant one.
@@ -381,7 +415,28 @@ class _ChatViewState extends State<ChatView> {
       _cache.markNotesSeen();
     }
 
-    return buffer.toString();
+    final instruction = buffer.toString();
+
+    // What the fixed part of every prompt actually costs.
+    //
+    // This is carried on every single turn whether or not it bears on what was
+    // just said, so it is the first thing to look at when the companion seems
+    // to be attending to background rather than to the user. Reading it as a
+    // share of the 4096-token window is the number that matters — a 2B model
+    // given far more background than message will answer the background.
+    assert(() {
+      final personaTokens = ContextBudget.estimateTokens(persona ?? '');
+      final knowledgeTokens = ContextBudget.estimateTokens(knowledge ?? '');
+      final total = personaTokens + knowledgeTokens;
+      debugPrint(
+        'System instruction: $total tokens '
+        '(${(total / ContextBudget.maxTokens * 100).round()}% of the window) '
+        '— persona $personaTokens, knowledge $knowledgeTokens',
+      );
+      return true;
+    }());
+
+    return instruction;
   }
 
   void _scrollToBottom() {
@@ -426,6 +481,18 @@ class _ChatViewState extends State<ChatView> {
     UsageMetrics.instance.recordMessageSent();
     await _chatStore.append(userMessage);
     await Future.delayed(const Duration(milliseconds: 150));
+
+    await _respondTo(userMessage, mood);
+  }
+
+  /// Answers a user turn that is already on screen and already stored.
+  ///
+  /// Split out of [_sendMessage] so the identical pipeline — crisis triage,
+  /// guards, memory, context budget, generation, repair — serves both a message
+  /// just typed and one left unanswered when the app closed. Two code paths
+  /// would drift, and the one that drifted would be the rarely-exercised one.
+  Future<void> _respondTo(ChatMessage userMessage, MoodReading mood) async {
+    final prompt = userMessage.text;
 
     // Only an *unambiguous* statement of intent short-circuits: no model, no
     // sampling, no memory. That reply must be identical every time, and a
@@ -522,12 +589,19 @@ class _ChatViewState extends State<ChatView> {
         );
         if (!mounted) return;
         if (error != null) {
+          // Resolve the tick. Without this the message sits on a single grey
+          // tick forever — "written down, never delivered" — which is exactly
+          // what a user reported after a long conversation. The failure is
+          // explained in the system line; leaving the tick unresolved on top of
+          // that just makes the app look broken in a second way.
+          _setDelivery(userMessage.id, MessageDelivery.read);
           await _emitSystem('The companion could not start: $error');
           setState(() => _isGenerating = false);
           return;
         }
         UsageMetrics.instance.recordModelReady();
       } else {
+        _setDelivery(userMessage.id, MessageDelivery.read);
         await _emitSystem(
           'The companion has not been downloaded yet — you can start that in '
           'Settings.',
@@ -588,6 +662,17 @@ class _ChatViewState extends State<ChatView> {
     // Two grey ticks: the companion has it and is composing.
     _setDelivery(userMessage.id, MessageDelivery.processing);
 
+    // Make room before generating rather than discovering there was none.
+    // Overflow does not fail loudly — it degrades — so it has to be prevented
+    // rather than detected.
+    await _trimContextIfNeeded(fullPrompt);
+
+    // Hold the process alive for the duration. Without this, switching away
+    // mid-generation loses the reply outright: a backgrounded app holding a
+    // 2.5 GB model is the first thing Android reclaims. Started here, while the
+    // app is definitely foreground, which is what `shortService` requires.
+    await BackgroundGeneration.instance.begin();
+
     String reply;
     try {
       reply = await _generate(fullPrompt);
@@ -598,14 +683,34 @@ class _ChatViewState extends State<ChatView> {
       // LiteRtService.reseed. Once only: if it repeats twice the problem is the
       // model's distribution, not the seed, and retrying again just costs the
       // user another re-prefill.
-      if (_isRepeat(reply)) {
+      // A reply that sanitises down to almost nothing is the same underlying
+      // fault as a repeat and takes the same remedy. The model pads to fill a
+      // length, `ReplySanitizer` strips the padding, and what is left can be a
+      // fragment — the stress run produced a companion turn containing the
+      // single character "I", which reached the screen because nothing checked.
+      //
+      // Reseeding is the only lever the runtime offers: the sampler seed is
+      // fixed for the life of a conversation, so regenerating without it returns
+      // the same text. Once only — if it comes back short twice the problem is
+      // the model's distribution rather than the seed, and a third attempt just
+      // costs the user another re-prefill.
+      if (_isRepeat(reply) || !ReplySanitizer.cleanDetailed(reply).isUsable) {
         final err = await _liteRtService.reseed(history: _replayHistory());
         if (err == null && mounted) {
-          reply = await _generate(fullPrompt);
+          final retry = await _generate(fullPrompt);
+          // Keep the retry only if it is actually better. A worse second
+          // attempt should not replace a usable first one.
+          if (ReplySanitizer.cleanDetailed(retry).isUsable ||
+              retry.trim().length > reply.trim().length) {
+            reply = retry;
+          }
         }
       }
     } catch (err) {
       if (!mounted) return;
+      // Otherwise this one stalls on two grey ticks — delivery was already set
+      // to `processing` before generation began.
+      _setDelivery(userMessage.id, MessageDelivery.read);
       await _emitSystem('Something went wrong during inference: $err');
       setState(() => _isGenerating = false);
       return;
@@ -650,6 +755,16 @@ class _ChatViewState extends State<ChatView> {
     _scrollToBottom();
     await _chatStore.append(replyMessage);
 
+    // If they walked away while this was being written, tell them it arrived.
+    // Checked here rather than at send time because what matters is where they
+    // are *now* — a reply that lands while they are watching needs no
+    // notification, and one for a message already on screen is just noise.
+    if (BackgroundGeneration.instance.isAppInBackground) {
+      unawaited(NotificationService.instance.showReply(reply).catchError(
+        (Object e) => debugPrint('Reply notification failed: $e'),
+      ));
+    }
+
     // The user's own words, not `fullPrompt`: the recalled-facts block is
     // scaffolding for one turn, and replaying it on a reseed would re-inject
     // facts chosen for a message that is no longer the current one.
@@ -668,6 +783,10 @@ class _ChatViewState extends State<ChatView> {
         debugPrint('Post-turn write failed: $e');
       }
     }());
+
+    // Released however generation ended. Leaving it running would pin a
+    // permanent notification and hold the process awake.
+    await BackgroundGeneration.instance.end();
 
     setState(() => _isGenerating = false);
 
@@ -858,6 +977,124 @@ class _ChatViewState extends State<ChatView> {
     const limit = _replayExchangeLimit * 2;
     return kept.length <= limit ? kept : kept.sublist(kept.length - limit);
   }
+
+  /// The most recent exchanges that fit the context window, newest kept.
+  ///
+  /// Whole exchanges, so a user turn is never left without the reply it
+  /// received — a dangling question reads to the model as one it still has to
+  /// answer.
+  List<LiteLmMessage> _historyWithinBudget(int budgetTokens) {
+    if (_modelTranscript.length < 2) return const [];
+
+    final kept = <LiteLmMessage>[];
+    var used = 0;
+
+    // Backwards in pairs: recency is what the window is for.
+    for (var i = _modelTranscript.length - 2; i >= 0; i -= 2) {
+      final cost = ContextBudget.estimateTokens(_modelTranscript[i].text) +
+          ContextBudget.estimateTokens(_modelTranscript[i + 1].text);
+
+      // **The newest exchange is kept whatever it costs.** It is the one the
+      // next reply actually has to answer — summarising it would compact away
+      // the very thing being responded to, and a companion that has forgotten
+      // the sentence it is replying to is worse than one that has forgotten
+      // last week. Everything above it is fair game for compaction.
+      final isNewest = i == _modelTranscript.length - 2;
+      if (!isNewest && used + cost > budgetTokens) break;
+
+      used += cost;
+      kept.insertAll(0, [_modelTranscript[i], _modelTranscript[i + 1]]);
+    }
+    return kept;
+  }
+
+  /// Rebuilds the conversation on a shorter history when the window is full.
+  ///
+  /// **The live conversation had no bound at all.** Resuming after a restart
+  /// replayed six exchanges, but within one session `LiteLmConversation`
+  /// accumulated every turn until the 4096-token KV cache overflowed — which
+  /// does not raise an error, it degrades: grammar decays, then tokens from
+  /// unrelated scripts appear, then nothing parses. A tester's screenshots
+  /// showed that whole progression.
+  ///
+  /// Nothing is lost. Dropped exchanges remain in `ChunkStore` and return
+  /// through retrieval when they are relevant, which is what episodic memory is
+  /// for. The window carries recency; retrieval carries the rest.
+  ///
+  /// Reseeding is the only mechanism the runtime offers — there is no way to
+  /// evict turns from a conversation in place, so it is rebuilt from a trimmed
+  /// history. That costs a re-prefill, so it is done only when the next turn
+  /// would genuinely not fit.
+  Future<void> _trimContextIfNeeded(String prompt) async {
+    if (!_liteRtService.isInitialized) return;
+
+    final systemChars = _buildSystemInstruction()?.length ?? 0;
+    if (ContextBudget.isSystemInstructionOversized(systemChars)) {
+      // The caps on facts, digests and summaries are individually sound but
+      // nothing caps their sum. If this fires, that is the bug.
+      debugPrint(
+        'System instruction is $systemChars chars — too large to hold a '
+        'conversation. Check MemoryCache caps.',
+      );
+    }
+
+    final budget = ContextBudget.availableForHistory(
+      systemInstructionChars: systemChars,
+      promptChars: prompt.length,
+    );
+
+    var used = 0;
+    for (final message in _modelTranscript) {
+      used += ContextBudget.estimateTokens(message.text);
+    }
+    if (used <= budget) return;
+
+    // Leave room for the compaction summary itself, or adding it would push
+    // the rebuilt conversation straight back over the line.
+    final trimmed = _historyWithinBudget(budget - _compactionReserve);
+
+    // Everything about to fall out of the window, compacted rather than
+    // discarded. Without this the companion forgets, mid-conversation,
+    // something the user said ten minutes ago — retrieval only brings it back
+    // if a later message happens to match it lexically, which is not something
+    // the thread of a live conversation can rely on.
+    final droppedUserTurns = <String>[];
+    for (var i = 0; i + 1 < _modelTranscript.length - trimmed.length; i += 2) {
+      droppedUserTurns.add(_modelTranscript[i].text);
+    }
+    final summary = SessionSummarizer.compact(droppedUserTurns);
+
+    final rebuilt = <LiteLmMessage>[
+      if (summary != null) ...[
+        LiteLmMessage.user(summary),
+        // A brief acknowledgement so the summary sits in the conversation as a
+        // completed exchange. Seeding the model's side is the same mechanism
+        // Persona.exemplars uses; an unanswered turn reads as one still owed a
+        // reply.
+        LiteLmMessage.model('Got it — I remember all of that.'),
+      ],
+      ...trimmed,
+    ];
+
+    debugPrint(
+      'Context full (~$used tokens, budget $budget). Compacting '
+      '${droppedUserTurns.length} older turns into '
+      '${summary == null ? 'nothing' : '${ContextBudget.estimateTokens(summary)} tokens'}, '
+      'keeping ${trimmed.length ~/ 2} exchanges.',
+    );
+
+    final err = await _liteRtService.reseed(history: rebuilt);
+    if (err != null) {
+      debugPrint('Context compaction failed, continuing uncut: $err');
+    }
+  }
+
+  /// Tokens held back for the compaction summary when trimming.
+  ///
+  /// [SessionSummarizer.compact] quotes at most three lines capped at 160
+  /// characters each, plus a topic line — so this is a ceiling on its output,
+  /// not a guess.
+  static const int _compactionReserve = 220;
 
   /// A reply's longest sentence, normalised — its substance, ignoring the
   /// interjection it happens to be wearing. `"I'm so glad you got promoted"`

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../models/journal_entry.dart';
@@ -49,24 +50,68 @@ class ChunkStore {
 
   // ── Writing ─────────────────────────────────────────────────────────────
 
-  /// Stores one completed exchange as a single chunk.
+  /// Stores what the user said in one exchange.
   ///
-  /// The user's turn and the reply are kept together rather than separately:
-  /// retrieved alone, *"I don't think I can face it"* is unusable, and the
-  /// pair is what carries the meaning. Prefixed with speaker labels so the
-  /// model can tell, when this is quoted back months later, who said what.
+  /// **The companion's own reply is deliberately not stored.** It used to be —
+  /// the pair went in together as `"They said: …\nYou replied: …"`, on the
+  /// reasoning that retrieved alone *"I don't think I can face it"* is unusable
+  /// and the pair carries the meaning. That reasoning was sound and the
+  /// consequence was not: it made generated text retrievable as memory, and
+  /// generated text can be wrong.
+  ///
+  /// Measured on device. From the ambiguous sentence *"My sister called last
+  /// week"* — where "called" is both a naming frame and a verb — the model
+  /// answered *"your sister's name is Last"*. That reply was then written here
+  /// as a chunk, retrieved by BM25 on the next question about the sister, and
+  /// fed back into the prompt as evidence. Asked again, the companion repeated
+  /// it with more confidence: *"Your sister is named Last. 😊"*
+  ///
+  /// So a single mis-parse became a durable false memory that reinforced itself
+  /// every time the subject came up. **Only the user's own words are ground
+  /// truth**; what the companion said about them is inference, and inference
+  /// must not be recalled as fact. If it needs its own recent words it has the
+  /// conversation history, which is bounded and does not persist as memory.
+  ///
+  /// [replyText] is still accepted so call sites read as a complete exchange,
+  /// and because the length floor should consider what was actually said, not
+  /// what was stored.
   Future<void> addExchange({
     required String userText,
     required String replyText,
   }) async {
-    final text = 'They said: ${userText.trim()}\n'
-        'You replied: ${replyText.trim()}';
+    final text = 'They said: ${userText.trim()}';
     if (text.length < minChunkLength) return;
     await _insert(
       text: text,
       source: ChunkSource.chat,
       sourceId: null,
     );
+  }
+
+  /// Removes chunks that recorded the companion's own replies.
+  ///
+  /// Existing installs already hold them, including — on the test device — a
+  /// chunk asserting a sister's name the user never gave. Left in place they
+  /// keep being retrieved, so the fix above only stops new ones being created;
+  /// this clears the ones already written.
+  ///
+  /// Matches on the stored `"You replied:"` marker, which no user-authored
+  /// chunk can contain: journal chunks carry their own prefix and chat chunks
+  /// now carry only `"They said:"`.
+  ///
+  /// Returns how many were removed, for the log.
+  Future<int> purgeGeneratedChunks() async {
+    try {
+      final db = await _db.database;
+      return await db.delete(
+        'memory_chunk',
+        where: 'text LIKE ?',
+        whereArgs: ['%You replied:%'],
+      );
+    } catch (e) {
+      debugPrint('Could not purge generated chunks: $e');
+      return 0;
+    }
   }
 
   /// Stores a condensed past session.
@@ -127,6 +172,14 @@ class ChunkStore {
     }
   }
 
+  /// Comparison form for deciding two chunks say the same thing — case,
+  /// punctuation and whitespace insensitive.
+  static String _contentKey(String text) => text
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9\s]'), '')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+
   Future<void> _insert({
     required String text,
     required ChunkSource source,
@@ -134,10 +187,33 @@ class ChunkStore {
   }) async {
     final db = await _database;
     final now = DateTime.now();
+
+    // **Content-addressed, so saying the same thing twice stores one chunk.**
+    //
+    // The id used to include a microsecond timestamp, which made every insert
+    // unique and let a repeated sentence accumulate. On the test device one
+    // sentence — *"My sister called last week…"* — was stored **five times**,
+    // and since retrieval returns up to [maxRecall] chunks the model could be
+    // handed three copies of it in a single prompt.
+    //
+    // That is bad twice over. It spends the episodic budget restating one
+    // thing, and it *amplifies* whatever that thing says: three identical
+    // copies of a sentence the model already mis-parses ("sister called last"
+    // read as a name) push it further, not less far.
+    //
+    // Duplicates also corrupt BM25 itself. The ranking assumes documents are
+    // distinct — repeated text inflates document frequency and depresses the
+    // IDF of exactly the terms that made the chunk worth keeping.
+    //
+    // Hashing the normalised text and letting `ConflictAlgorithm.replace` do
+    // the work means a re-said sentence refreshes its timestamp instead of
+    // adding a row. `sourceId` is part of the key so the same line in two
+    // different journal entries stays two chunks.
+    final key = '${_contentKey(text)}|${sourceId ?? ''}'.hashCode;
     await db.insert(
       'memory_chunk',
       MemoryChunk(
-        id: '${source.name}:${now.microsecondsSinceEpoch}:${text.hashCode}',
+        id: '${source.name}:$key',
         text: text,
         source: source,
         sourceId: sourceId,
@@ -145,6 +221,36 @@ class ChunkStore {
       ).toMap(),
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+  }
+
+  /// Collapses chunks stored before insertion became content-addressed.
+  ///
+  /// Existing installs already hold the duplicates, and they keep being
+  /// retrieved. Keeps the newest row of each identical text.
+  ///
+  /// Returns how many were removed, for the log.
+  Future<int> purgeDuplicateChunks() async {
+    try {
+      final db = await _database;
+      final rows = await db.query('memory_chunk',
+          columns: ['id', 'text', 'sourceId'], orderBy: 'createdAt DESC');
+
+      final seen = <String>{};
+      final doomed = <String>[];
+      for (final row in rows) {
+        final key = '${_contentKey(row['text'] as String? ?? '')}'
+            '|${row['sourceId'] ?? ''}';
+        if (!seen.add(key)) doomed.add(row['id'] as String);
+      }
+      if (doomed.isEmpty) return 0;
+
+      final marks = List.filled(doomed.length, '?').join(',');
+      return await db
+          .delete('memory_chunk', where: 'id IN ($marks)', whereArgs: doomed);
+    } catch (e) {
+      debugPrint('Could not purge duplicate chunks: $e');
+      return 0;
+    }
   }
 
   /// Paragraph-aware split, falling back to sentence boundaries for a

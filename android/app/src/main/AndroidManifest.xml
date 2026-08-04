@@ -18,6 +18,20 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- So a pending check-in survives a reboot. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+
+    <!-- Lets a reply finish after the user switches away.
+         Generation takes 15-30 seconds, and a backgrounded process holding a
+         2.5 GB model is the first thing Android reclaims — so without this the
+         reply is simply lost. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <!-- specialUse, not shortService. shortService is capped by the platform at
+         roughly three minutes and then force-stopped, which is exactly what
+         killed a reply mid-generation: backgrounded inference is far slower
+         than foreground, and a 24-second reply took 180 seconds with the screen
+         off. specialUse exists for work that does not fit the predefined
+         categories and carries no per-run ceiling. See docs/RELEASE.md — Play
+         asks for written justification for this type. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
     <application
         android:label="sanctuAIry"
         android:name="${applicationName}"
@@ -42,6 +56,20 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- Holds the process alive while a reply is being written. See
+             GenerationService for why a wake lock alone is not enough. -->
+        <service
+            android:name=".GenerationService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="On-device language model inference. The user has
+                    sent a message and the reply is computed locally on the CPU;
+                    it must finish even if they switch away, and nothing leaves
+                    the device." />
+        </service>
+
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />

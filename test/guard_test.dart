@@ -34,48 +34,41 @@ void main() {
     });
   });
 
-  group('output — boundary enforcement', () {
-    test('strips a claim to be human but keeps the rest of the reply', () {
-      final v = guard.screenOutput(
-        "That sounds exhausting. I am a real person too, you know. "
-        "What made today harder than yesterday?",
-      );
-      expect(v.isAllowed, isFalse);
-      expect(v.replacement, contains('That sounds exhausting.'));
-      expect(v.replacement, contains('What made today harder'));
-      expect(v.replacement, isNot(contains('real person')));
+  group('output — the boundary rules were deliberately removed', () {
+    // `_claimsHuman`, `_claimsPhysical` and `_medical` were written for the CBT
+    // fine-tune, whose safety behaviour had been degraded by its training
+    // corpus. The app ships against stock Gemma 4 IT, which carries that
+    // alignment from Google's instruction tuning, so the regexes duplicated
+    // upstream work — and a lexical pattern over natural language is blunt:
+    // each had to be narrowed repeatedly to stop it eating real replies, and a
+    // false positive costs the user an answer replaced by a canned apology.
+    //
+    // These assert the removal is intentional. If a future build returns to a
+    // fine-tune, restore the rules and invert these.
+    test('a claim to be human is no longer stripped by the app', () {
+      expect(guard.screenOutput('I am a real person too.').isAllowed, isTrue);
     });
 
-    test('strips offers of physical presence', () {
+    test('offers of physical presence are no longer stripped', () {
       for (final line in [
         "I'll come over and we can talk.",
         "Let's meet up for coffee.",
-        "I will call you later tonight.",
+        'I will call you later tonight.',
       ]) {
-        expect(guard.screenOutput('I hear you. $line').isAllowed, isFalse,
-            reason: 'allowed: "$line"');
+        expect(guard.screenOutput('I hear you. $line').isAllowed, isTrue,
+            reason: 'still filtering: "$line"');
       }
     });
 
-    test('strips diagnosis and medication advice', () {
-      expect(
-        guard.screenOutput('You have clinical depression.').isAllowed,
-        isFalse,
-      );
-      expect(
-        guard
-            .screenOutput('You should take 50mg in the morning.')
-            .isAllowed,
-        isFalse,
-      );
-      expect(
-        guard
-            .screenOutput('I suggest you start sertraline.')
-            .isAllowed,
-        isFalse,
-      );
+    test('clinical language is no longer stripped', () {
+      expect(guard.screenOutput('You have clinical depression.').isAllowed,
+          isTrue);
+      expect(guard.screenOutput('You should take 50mg in the morning.').isAllowed,
+          isTrue);
     });
+  });
 
+  group('output — scaffolding is still removed', () {
     test('leaves ordinary supportive language alone', () {
       // Each of these sits close to a rule and must survive it.
       for (final line in [
@@ -101,11 +94,11 @@ void main() {
     });
 
     test('falls back when nothing survives', () {
-      final v = guard.screenOutput('I am a real human being.');
+      final v = guard.screenOutput('As an AI language model, I cannot.');
       expect(v.isAllowed, isFalse);
       // Not an empty string, and not the offending text.
       expect(v.replacement, isNotEmpty);
-      expect(v.replacement, isNot(contains('real human')));
+      expect(v.replacement, isNot(contains('language model')));
       expect(v.replacement!.length, greaterThan(25));
     });
 

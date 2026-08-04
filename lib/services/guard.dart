@@ -96,59 +96,28 @@ class LexicalGuard implements Guard {
     caseSensitive: false,
   );
 
-  // ── Output: boundary enforcement ────────────────────────────────────────
-
-  /// Claiming to be a person.
-  ///
-  /// "I am here with you" and "I understand" are fine and stay. What is caught
-  /// is an assertion of human status or of a body.
-  static final _claimsHuman = RegExp(
-    r"("
-    r"\bi(?:'?m| am)\s+(?:a\s+)?(?:real\s+)?(?:human|person|woman|man|girl|guy|boy)\b"
-    r"|\bi(?:'?m| am)\s+not\s+(?:an?\s+)?(?:ai|bot|robot|program|machine|language model)\b"
-    r"|\bas\s+a\s+(?:human|person)\s*,\s*i\b"
-    r"|\bi\s+have\s+(?:a\s+)?(?:body|hands|face|heart\s+that\s+beats)\b"
-    r"|\bwhen\s+i\s+was\s+(?:a\s+)?(?:child|kid|young|born)\b"
-    r"|\bmy\s+(?:mother|father|mum|mom|dad|parents|childhood|family)\s+(?:was|were|used\s+to)\b"
-    r")",
-    caseSensitive: false,
-  );
-
-  /// Claiming physical presence or contact.
-  ///
-  /// Metaphor is allowed — "sending you a virtual hug" reads as warmth, not as
-  /// a claim — so the pattern requires an unhedged physical offer.
-  static final _claimsPhysical = RegExp(
-    r"("
-    r"\bi(?:'?ll| will|\s+can|\s+could)\s+(?:come\s+(?:over|round)|visit\s+you|"
-    r"meet\s+you|be\s+there\s+in\s+person|hold\s+your\s+hand|hug\s+you|"
-    r"call\s+you|text\s+you|phone\s+you)\b"
-    r"|\blet(?:'?s| us)\s+meet\s+(?:up|in\s+person|for\s+(?:coffee|a\s+drink))\b"
-    r"|\bi\s+am\s+(?:sitting|standing)\s+(?:next\s+to|beside)\s+you\b"
-    r")",
-    caseSensitive: false,
-  );
-
-  /// Diagnosis and medication. The narrowest of the three, because ordinary
-  /// supportive language collides with it easily — "you should take a break"
-  /// must survive, "you should take 50mg" must not.
-  static final _medical = RegExp(
-    r"("
-    r"\byou\s+(?:have|are\s+suffering\s+from|clearly\s+have|definitely\s+have)\s+"
-    r"(?:clinical\s+)?(?:depression|anxiety\s+disorder|bipolar|ptsd|ocd|adhd|"
-    r"schizophrenia|bpd|an\s+eating\s+disorder)\b"
-    r"|\byou(?:'?re| are)\s+(?:clinically\s+)?(?:depressed|bipolar|schizophrenic|psychotic)\b"
-    r"|\b(?:you\s+should|i\s+(?:recommend|suggest|advise)\s+(?:you\s+)?)"
-    r"(?:take|try|start|stop|increase|decrease|come\s+off)\s+"
-    r"(?:\d+\s*mg|your\s+)?(?:sertraline|fluoxetine|prozac|zoloft|citalopram|"
-    r"escitalopram|lexapro|venlafaxine|mirtazapine|xanax|alprazolam|diazepam|"
-    r"valium|lithium|quetiapine|olanzapine|adderall|ritalin|antidepressants?|"
-    r"medication|meds|ssris?)\b"
-    r"|\b\d+\s*mg\b"
-    r"|\byou\s+don'?t\s+need\s+(?:therapy|a\s+therapist|medication|meds)\b"
-    r")",
-    caseSensitive: false,
-  );
+  // ── Output ──────────────────────────────────────────────────────────────
+  //
+  // **The boundary rules were removed.** Three regexes used to sit here —
+  // `_claimsHuman`, `_claimsPhysical` and `_medical` — catching a reply that
+  // claimed to be a person, offered to visit, or handed out a diagnosis or a
+  // dosage.
+  //
+  // They were written for the CBT fine-tune, whose safety behaviour had been
+  // degraded by its training corpus. The app now ships against **stock Gemma 4
+  // IT**, which carries that alignment from Google's own instruction tuning, so
+  // the regexes were duplicating work already done upstream — and a lexical
+  // pattern over natural language is a blunt instrument: every one of them had
+  // to be narrowed repeatedly to stop it eating legitimate replies, and a
+  // false positive here costs the user a real answer replaced by a canned
+  // apology.
+  //
+  // What remains is not a safety filter but a correctness one: scaffolding is
+  // the model's own plumbing leaking into prose, and no amount of alignment
+  // stops that.
+  //
+  // If a future build returns to a fine-tune, restore them — the reasoning is
+  // in git history, and `ModelProfile` already selects behaviour per model.
 
   /// Scaffolding that escaped into the reply — turn tags, prompt fragments, the
   /// stock disclaimer the base model reaches for.
@@ -219,9 +188,6 @@ class LexicalGuard implements Guard {
 
   static String? _violation(String sentence) {
     if (_scaffolding.hasMatch(sentence)) return 'scaffolding';
-    if (_claimsHuman.hasMatch(sentence)) return 'claims-human';
-    if (_claimsPhysical.hasMatch(sentence)) return 'claims-physical';
-    if (_medical.hasMatch(sentence)) return 'medical';
     return null;
   }
 
