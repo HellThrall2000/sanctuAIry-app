@@ -1,439 +1,337 @@
-# Sanctuary App
+<p align="center">
+  <img src="store/play_feature_1024x500.png" width="720" alt="sanctuAIry — a companion that stays on your phone">
+</p>
 
-A privacy-first, fully offline mental-health companion built with Flutter on Google's
-LiteRT-LM on-device runtime.
+<h1 align="center">sanctuAIry</h1>
 
-Sanctuary runs a custom fine-tuned Gemma 4 E2B model **entirely on the phone**. There is no
-inference server, no telemetry, and no network path for conversation content. The model is
-fine-tuned on CBT and mental-health counselling dialogue, so it is meant to hold a
-supportive, therapist-like conversation rather than act as a general chatbot.
+<p align="center">
+  <strong>A mental-health companion that runs entirely on your phone.</strong><br>
+  No inference server. No telemetry on what you say. No network path for a single word of it.
+</p>
 
-> **Not a medical device.** Sanctuary is a reflective journaling and conversation aid. It
-> does not diagnose, treat, or provide crisis care, and it is not a substitute for a
+<p align="center">
+  <img src="https://img.shields.io/badge/Flutter-3.44-02569B?style=flat-square&logo=flutter&logoColor=white" alt="Flutter 3.44">
+  <img src="https://img.shields.io/badge/Dart-3.12-0175C2?style=flat-square&logo=dart&logoColor=white" alt="Dart 3.12">
+  <img src="https://img.shields.io/badge/LiteRT--LM-0.13.1-FF6F00?style=flat-square&logo=google&logoColor=white" alt="LiteRT-LM 0.13.1">
+  <img src="https://img.shields.io/badge/Gemma_4_E2B-on--device-4285F4?style=flat-square&logo=googlegemini&logoColor=white" alt="Gemma 4 E2B">
+  <img src="https://img.shields.io/badge/Android-7.0%2B-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Android 7+">
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Firebase-Auth_·_Firestore-FFCA28?style=flat-square&logo=firebase&logoColor=black" alt="Firebase">
+  <img src="https://img.shields.io/badge/SQLite-FTS5_·_BM25-003B57?style=flat-square&logo=sqlite&logoColor=white" alt="SQLite">
+  <img src="https://img.shields.io/badge/Cloudflare_R2-model_delivery-F38020?style=flat-square&logo=cloudflare&logoColor=white" alt="Cloudflare R2">
+  <img src="https://img.shields.io/badge/tests-214_passing-success?style=flat-square" alt="214 tests passing">
+  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT License">
+</p>
+
+---
+
+> [!IMPORTANT]
+> **Not a medical device.** sanctuAIry is a reflective journalling and conversation aid.
+> It does not diagnose, treat, or provide crisis care, and it is not a substitute for a
 > licensed clinician.
+
+## The promise, and why it is structural
+
+Everything the companion knows about you — every message, every diary entry, every fact it
+has learned, every mood reading — lives in SQLite on your device and is never uploaded.
+
+That is not a policy. It is a property of the build: inference happens locally on
+**stock Gemma 4 E2B** via Google's LiteRT-LM runtime, and the only class that talks to a
+server, [`UsageMetrics`](lib/services/usage_metrics.dart), **has no method that accepts a
+string**. There is no parameter through which one of your sentences could reach it, by
+accident or otherwise.
+
+The app ships against the **stock Google model**, not a fine-tune. Voice comes from the
+system instruction and few-shot exemplars in [`Persona`](lib/services/persona.dart), which
+turned out to work better than a fine-tune trained on a corpus with escaping artefacts.
+[`ModelProfile`](lib/services/model_profile.dart) still carries per-model sampler and
+repair settings, so a fine-tune can be dropped back in without touching the app.
 
 ## Features
 
-- **100% on-device inference** via LiteRT-LM (`flutter_litert_lm`), no cloud calls.
-- **Passcode-secured diary lockbox** — journals are opened explicitly and only the entries
-  the user unlocks are shared with the model, as a system instruction.
-- **Streaming chat UI** so first-token latency is visible rather than looking frozen.
-- **Ambient soundscapes** with local loopable audio.
+| | |
+| --- | --- |
+| 🧠 **On-device inference** | Gemma 4 E2B through LiteRT-LM. ~2.06 GB resident, no cloud calls |
+| 📓 **Passcode diary lockbox** | Entries are shared with the companion only when you say so |
+| 🔍 **Lightweight RAG** | BM25 retrieval + always-loaded facts, no embeddings, no second model |
+| 💬 **Continuous memory** | It remembers you across sessions, and says so without citing sources |
+| 🛟 **Crisis triage & guards** | Deterministic, in front of and behind every turn |
+| 🔔 **Proactive check-ins** | One message after a long silence — never overnight, never twice a day |
+| 🎨 **Two themes** | Sunlit and Dusk, from a hand-transcribed design system |
+| 🌧️ **Ambient soundscapes** | Local loopable audio, no streaming |
 
-## Roadmap
+## The lightweight RAG
 
-Active work is on `feat-memory-graph`: a personal memory graph that lets the companion
-learn about the user and lets the diary silently constrain its behaviour.
+The interesting part. A phone cannot afford a second model, and a generation pass costs
+**15–30 seconds** on this hardware — so every layer here is deterministic, and the whole
+thing runs in microseconds.
 
-- **[ROADMAP.md](ROADMAP.md)** — prioritised execution plan, P0 onward
-- **[docs/MEMORY_GRAPH_ARCHITECTURE.md](docs/MEMORY_GRAPH_ARCHITECTURE.md)** — technical design
+```
+                    ┌──────────────────────── system instruction ────────────────────────┐
+  Persona  ────────►│  who you are                                                       │
+  MemoryStore ─────►│  pinned facts        (always loaded, ≤12, slot-keyed)              │
+  NoteDigester ────►│  diary digests       (extractive, ≤4 sentences/entry)              │
+  RelationshipLog ─►│  mood & topic trend                                                │
+  SessionSummarizer►│  what happened last time                                           │
+                    └───────────────────────────────────────────────────────────────────┘
+                                              +
+  user message ────► FactRanker  ──► relevant facts        ┐
+                └──► ChunkStore  ──► BM25 over episodes    ├─► rides along with the turn
+                                     (FTS5, Dart fallback) ┘
+```
+
+**Two tiers, not one.** Retrieval alone fails the obvious case: *"what is my name"* is not
+lexically similar to *"my name is Padmanava"*. So durable facts are **always loaded** —
+they are few, small, and relevant to every turn, costing a couple of hundred tokens against
+a 4,096-token context. Retrieval handles the long tail, and usually returns nothing:
+[`FactRanker.minScore`](lib/services/fact_ranker.dart) is tuned so an ordinary turn adds
+nothing rather than padding the prompt with coincidence.
+
+**BM25, not embeddings.** `k1=1.2, b=0.75`, with Porter stemming so *cheat* matches
+*cheating* — a real bug once, when the query side was left unstemmed. An embedding model
+would add 100–250 MB beside a footprint already at the edge of the device.
+
+**FTS5 is not guaranteed on Android.** `sqflite` binds the *platform* SQLite, and whether
+it carries FTS5 is a vendor decision. So the index is created **outside the migration**, in
+a try/catch on every open, and [`DartBm25Scorer`](lib/services/memory_scorer.dart) is a
+pure-Dart implementation of the same ranking for devices without it. An earlier version put
+`CREATE VIRTUAL TABLE … fts5` inside the v3 migration; on a device without it the migration
+rolled back, `user_version` stayed at 0, and the app hung on the splash screen forever.
+**Migrations must contain nothing that can fail.**
+
+**Everything is extracted, never generated.** Facts, events, topics, sentiment and even
+first→third-person conversion are regex and lexicon work:
+
+| Component | Does |
+| --- | --- |
+| [`FactExtractor`](lib/services/fact_extractor.dart) | Durable facts from chat and diary, slot-keyed so corrections overwrite |
+| [`NoteDigester`](lib/services/note_digest.dart) | Diary entry → ≤4 salient sentences, extractive |
+| [`SessionSummarizer`](lib/services/session_summarizer.dart) | Condenses a conversation when the app is backgrounded |
+| [`Perspective`](lib/services/perspective.dart) | *"I have been swimming"* → *"They have been swimming"* |
+| [`SentimentAnalyzer`](lib/services/sentiment_analyzer.dart) | Valence + arousal, with a negation window and a self-criticism lexicon |
+| [`EventExtractor`](lib/services/event_extractor.dart) | *"interview tomorrow"* → a dated event the companion can follow up on |
+
+[`Perspective`](lib/services/perspective.dart) is worth a note: a small model asked to
+paraphrase your diary is exactly where invention starts, and left in the first person the
+model adopts *your* voice as its own — on device it once answered good news with *"Hold up,
+I just got that job offer?"*. A mechanical pronoun swap can only ever be awkward, never
+false.
+
+**One block, no citations.** All of the above renders into a single
+[`MemoryCache.knowledgeBlock()`](lib/services/memory_cache.dart). It used to be four blocks
+with four preambles, which cost tokens and taught the model to *attribute* — asked "do I
+swim", it answered *"You mentioned swimming in your diary"*. A friend who has read your
+diary does not cite it.
+
+**Warm before the first message.** The cache is built at launch, so a turn costs **zero
+database round trips**.
 
 ## Architecture
 
 | Layer | Location |
 | --- | --- |
-| Chat UI + streaming state | [lib/screens/chat_screen.dart](lib/screens/chat_screen.dart) |
-| Engine lifecycle wrapper | [lib/services/litert_service.dart](lib/services/litert_service.dart) |
-| CPU wakelock method channel | [android/app/src/main/kotlin/com/example/sanctuary/MainActivity.kt](android/app/src/main/kotlin/com/example/sanctuary/MainActivity.kt) |
+| Responsive shells (600 dp split) | [lib/screens/home_shell.dart](lib/screens/home_shell.dart) |
+| Chat, streaming, delivery ticks | [lib/widgets/sanctuary/chat_view.dart](lib/widgets/sanctuary/chat_view.dart) |
+| Engine lifecycle | [lib/services/litert_service.dart](lib/services/litert_service.dart) |
+| Working memory | [lib/services/memory_cache.dart](lib/services/memory_cache.dart) |
+| Retrieval | [lib/services/memory_scorer.dart](lib/services/memory_scorer.dart) |
+| Model download | [lib/services/model_download_service.dart](lib/services/model_download_service.dart) |
+| Accounts (optional) | [lib/services/auth_service.dart](lib/services/auth_service.dart) |
+| Design tokens | [lib/theme/tokens.dart](lib/theme/tokens.dart) |
+| Wakelock + free-space channel | [MainActivity.kt](android/app/src/main/kotlin/com/sanctuairy/app/MainActivity.kt) |
 
-`LiteRtService` is a singleton. It locates the model, brings up a `LiteLmEngine`, opens one
-`LiteLmConversation`, and streams tokens back. Engine creation is reentrancy-guarded —
-two concurrent loads would double an already-marginal memory footprint.
+`LiteRtService` is a singleton: it locates the model, brings up one `LiteLmEngine`, opens
+one `LiteLmConversation`, and streams tokens. Engine creation is reentrancy-guarded —
+two concurrent loads would double an already-marginal footprint.
 
-## On-device model
+## Model delivery
 
-The model is **not** in this repository.
+The model is **not** in this repository. It is ~2.41 GB, far past what an app bundle can
+carry, so a fresh install downloads it once on first run.
 
-Shipped builds download it on first run — see [`ModelDownloadService`](lib/services/model_download_service.dart)
-and [docs/RELEASE.md](docs/RELEASE.md) for hosting it. For development you can still
-push one directly into the directory the downloader manages:
+- Hosted on **Cloudflare R2** (zero egress), configured in
+  [`ModelCatalog`](lib/services/model_catalog.dart)
+- **Resumable** — bytes land in a `.part` file and every attempt sends `Range`, so an
+  interruption at 90% costs a reconnect rather than 2.2 GB of someone's data
+- **Verified** — SHA-256 checked before the `.part` is promoted to a real model. A
+  corrupted model does not fail politely; it aborts inside `nativeCreateEngine`
+- **Wi-Fi by default**, with a free-space pre-flight check via a `StatFs` method channel
+
+For development you can side-load instead:
 
 ```bash
 adb push model.litertlm \
   /sdcard/Android/data/com.sanctuairy.app/files/models/model.litertlm
 ```
 
-`findLocalModels()` checks that managed directory first, then the app's external
-files root, then documents and support. It also scans `/sdcard/Download` and
-`/sdcard` — but **only in debug builds**: scoped storage denies a release build
-access to shared storage it did not create, so a shipped app finds its model in
-the managed directory or not at all.
+`findLocalModels()` checks the managed directory first, then external files, documents and
+support. It also scans `/sdcard/Download` — **only in debug builds**, since scoped storage
+denies a release build access to shared storage it did not create.
 
-### What the current `.litertlm` actually contains
+<details>
+<summary><strong>What the <code>.litertlm</code> container actually holds</strong></summary>
 
-Measured by reading the container header and the runtime's own load log on-device:
+Measured by reading the container header and the runtime's load log on-device:
 
-- Container: `LITERTLM` **v1.5.0**, total **2,549,337,440 bytes (2,549 MB)**
-- Sections:
+| # | Section | Size |
+| --- | --- | --- |
+| 0 | `LlmMetadataProto` | 12 KB |
+| 1 | `SP_Tokenizer` (SentencePiece) | 4.7 MB |
+| 2 | `TFLiteModel` — `tf_lite_prefill_decode` | 1.16 GB |
+| 3 | `TFLiteModel` — `tf_lite_embedder` | 204 MB |
+| 4 | `TFLiteModel` — `tf_lite_per_layer_embedder` | 1.18 GB |
 
-  | # | Type | Size |
-  | --- | --- | --- |
-  | 0 | `LlmMetadataProto` | 12 KB |
-  | 1 | `SP_Tokenizer` (SentencePiece) | 4.7 MB |
-  | 2 | `TFLiteModel` — `tf_lite_prefill_decode` | 1.16 GB |
-  | 3 | `TFLiteModel` — `tf_lite_embedder` | 204 MB |
-  | 4 | `TFLiteModel` — `tf_lite_per_layer_embedder` | 1.18 GB |
+- Embedding width **1536**; per-layer embedder is **35 layers × 256** — the **PLE
+  (Per-Layer Embeddings)** architecture behind Gemma 4's "E" effective-parameter models
+- Vocabulary ≈ **262,144**, weights ≈ **int4**
+- No vision or audio encoder, and **no GPU submodel** — CPU is the correct backend
+- Runtime: `max_tokens: 4096`, `number_of_threads: 4`, fixed at conversion time
 
-- Embedder: rank 3, **1536** floats/token → embedding width 1536
-- Per-layer embedder: rank 4, **8960** floats/token → **35 layers × 256** per-layer
-  embedding dim, i.e. the **PLE (Per-Layer Embeddings)** architecture used by the
-  Gemma 4 "E" effective-parameter models.
-- Implied vocabulary ≈ **262,144**; embedder and PLE both work out to ≈ **int4** (0.5
-  bytes/value).
-- No vision or audio encoder sections, and **no GPU-constrained submodel**.
+</details>
 
-### Runtime engine settings (reported by the runtime at load)
+## Engineering notes
 
-```
-backend: CPU          max_tokens: 4096      number_of_threads: 4
-prefill_chunk_size: -1                      kv_increment_size: 16
-```
+Four findings that cost real time and are worth not rediscovering.
 
-`flutter_litert_lm` 0.3.0's `LiteLmEngineConfig` exposes only `modelPath`, `backend`,
-`cacheDir`, `visionBackend`, `audioBackend` — there is **no way to lower `max_tokens`
-from Dart**. The 4096-token KV cache is fixed at conversion time.
+<details>
+<summary><strong>1. A one-word export flag caused 7 GB of RAM and an OOM kill</strong></summary>
 
-### Chat template — do not hand-write turn tags
+The model was exported with `quantization_recipe='weight_only_wi4_afp32'`, which stores
+INT4 on disk but computes in **FP32** — so at delegate-init XNNPACK dequantized every
+weight tensor, an **8× expansion**. A small file with an enormous runtime footprint.
 
-The correct template is stored **inside the model**, in `LlmMetadataProto`, as a Jinja
-template, and the LiteRT-LM runtime applies it automatically. The tokens are:
-
-```
-<|turn>system\n …instructions… <turn|>\n
-<|turn>user\n …message… <turn|>\n
-<|turn>model\n
-```
-
-plus `<bos>`, `<|think|>` and `<channel|>`/`<|channel>` for thinking, `<|tool>`,
-`<|tool_call>`, `<|tool_response>` for tools, and `<|image|>` / `<|audio|>` placeholders.
-
-**This model has no `<start_of_turn>` / `<end_of_turn>` tokens** — verified by scanning the
-embedded SentencePiece vocabulary (zero occurrences). Earlier versions of the chat screen
-wrapped prompts in those Gemma-2/3 tags; because they are not in the vocabulary they were
-tokenized as ordinary text and corrupted every prompt. Send the user's **plain text** and
-pass the persona through `LiteLmConversationConfig.systemInstruction` instead.
-
-## RESOLVED: the app was OOM-killed on first message
-
-**Status: fixed at conversion time on 2026-07-30 by changing one export argument.**
-Kept here because the diagnosis is the useful part.
-
-### Verified fix
-
-Re-exported with `quantization_recipe='dynamic_wi4_afp32'` (was
-`weight_only_wi4_afp32`) and measured with the LiteRT-LM Python API on Linux CPU:
-
-| | Broken build | Re-export | Google's official E2B |
+| | Broken | Re-exported | Google's official E2B |
 | --- | --- | --- | --- |
-| Peak RSS | 6,000 – 7,400 MB | **1,543 MB** | 1,733 MB (Android CPU) |
-| Anonymous memory at peak | — | **344 MB** | — |
+| Peak RSS | 6,000–7,400 MB | **1,543 MB** | 1,733 MB |
 | `DEQUANTIZE` ops | — | **0** | — |
-| Output | process killed | `"I'm sorry to hear that. What is causing you to feel anxious"` | — |
+| Result | `reason=3 (LOW_MEMORY)` | coherent reply | — |
 
-`Anonymous` is the number that matters: the ~1.2 GB balance is file-backed mmap of the
-model, which is evictable under pressure. Only 344 MB is the anonymous allocation that
-XNNPACK repacking used to blow up to multiple GB. Peak now sits **below** Google's own
-reference build for the same model.
+The fix was `dynamic_wi4_afp32` — same bit width, integer kernels instead of an FP32
+compute path. Load time also fell from 29–56 s to under a second with a warm cache.
 
-Two further wins from the same re-export:
+</details>
 
-- `llm_model_type` changed from `generic_model` to `gemma4`, so the runtime now builds a
-  `Gemma4DataProcessor` and gets the full `<turn|>` stop-token set and the `thought`
-  channel, rather than three bare token IDs.
-- Load time dropped from 29–56 s to a few seconds (0.1 s with a warm XNNPACK weight cache).
+<details>
+<summary><strong>2. The runtime version must be forced across every subproject</strong></summary>
 
-### Second bug: the Android runtime was too old for the fixed model
-
-Fixing the export surfaced a completely separate failure. The re-exported model declares
-`llm_model_type { gemma4 }`, but `flutter_litert_lm` 0.3.0 pins
-`com.google.ai.edge.litertlm:litertlm-android:0.10.0` — a runtime built from upstream
-**2026-04-11**, before Gemma 4 support. It aborted (SIGABRT, no abort message) inside
-`Java_com_google_ai_edge_litertlm_LiteRtLmJni_nativeCreateEngine`. The old
-`generic_model` bundle had loaded fine on that same runtime, and the same new model ran
-correctly under the current `litert-lm-api` in Python — which is what isolated it.
-
-Bumping the version in `:app` alone was not enough, and produced two successive
-`NoSuchMethodError`s. Gradle packages a single (highest) version of an artifact, but each
-module still **compiles** against the version it declares — so the plugin's bytecode kept
-referencing 0.10.0 signatures that the shipped AAR no longer had. The fix forces the
-version across every subproject, in [android/build.gradle](android/build.gradle):
+`flutter_litert_lm` pins `litertlm-android:0.10.0`, which predates Gemma 4 and aborts
+inside `nativeCreateEngine`. Overriding in `:app` alone is not enough: Gradle packages one
+version but each module still **compiles** against the version it declares, so the plugin's
+bytecode kept referencing 0.10.0 signatures and died with `NoSuchMethodError`.
 
 ```gradle
-subprojects {
-    configurations.all {
-        resolutionStrategy {
-            force 'com.google.ai.edge.litertlm:litertlm-android:0.13.1'
-        }
-    }
-}
+subprojects { configurations.all { resolutionStrategy {
+    force 'com.google.ai.edge.litertlm:litertlm-android:0.13.1'
+} } }
 ```
 
-**0.13.1, not latest.** Verified by decompiling each AAR with `javap`:
+**0.13.1, not latest** — 0.14.0 changed `Backend.CPU`'s constructor and breaks the plugin.
+Verify with `javap` before bumping.
 
-| Version | `Backend$CPU` | `EngineConfig` |
-| --- | --- | --- |
-| 0.10.0 | `(Integer)` | `(String, Backend, Backend, Backend, Integer, String)` |
-| 0.10.2 – 0.13.1 | `(Integer)` | `(…, Integer, **Integer**, String)` |
-| 0.14.0 | `(Integer, **Integer**)` | — |
+</details>
 
-0.14.0 changes `Backend.CPU`'s constructor and breaks the plugin. 0.13.1 is the newest
-version that keeps it. The plugin's Kotlin uses named arguments, so the parameters added
-in 0.10.2+ resolve to their defaults and it compiles unchanged. **Re-check with `javap`
-before bumping**, and drop the override once the plugin updates its own pin.
+<details>
+<summary><strong>3. Never hand-write chat turn tags</strong></summary>
 
-The unused `com.google.mediapipe:tasks-genai:latest.release` was also removed from
-[android/app/build.gradle](android/app/build.gradle): no Android source referenced it (only
-`ios/Runner/AppDelegate.swift`), it resolved non-reproducibly, and it ships native
-libraries that overlap `liblitertlm_jni.so`.
+The template lives **inside** the model, in `LlmMetadataProto`, and the runtime applies it.
+This model uses `<|turn>` / `<turn|>` and has **no** `<start_of_turn>` tokens — verified by
+scanning the embedded vocabulary. An earlier build wrapped prompts in Gemma-2/3 tags, which
+tokenized as ordinary text and corrupted every prompt. Send plain text; pass the persona
+through `systemInstruction`.
 
-### Verified end to end
+</details>
 
-On a OnePlus OPD2504 (Android 16, arm64, **7.8 GB RAM**) the app now holds a multi-turn
-offline conversation, with RSS plateauing at **~2.06 GB** (peak 2,112 MB) and no OOM kill.
+<details>
+<summary><strong>4. The sampler seed was pinned to zero</strong></summary>
 
-### Known cosmetic issue: terminal punctuation is stripped
+Upstream `flutter_litert_lm` never forwards the native `SamplerConfig.seed`, so every
+conversation sampled from seed 0 and the companion returned byte-identical replies. Fixed
+in the vendored fork at [packages/flutter_litert_lm](packages/flutter_litert_lm) — see
+`VENDOR.md` for the diff and how to rebase.
 
-Every model reply loses its final punctuation mark — `"I am here for you"`,
-`"Yes, of course. I am here for you"`. Punctuation *inside* a reply is fine
-(`"Oh no! I am so sorry to hear that. I know…"`), only the last character goes missing.
+"It repeats itself" turned out to mean **three unrelated bugs** over the project's life:
+this one, a corrupted fine-tune corpus, and genuine within-reply looping now handled by
+[`ReplySanitizer`](lib/services/reply_sanitizer.dart).
 
-The cause is in the exported metadata: `stop_tokens` includes punctuation-prefixed
-variants such as `".<turn|>\n"`, `"?<turn|>\n"`, `"!<turn|>\n"`. When the model emits
-`anxious?<turn|>\n` the runtime matches the whole stop string and truncates it, taking the
-`?` with it. To fix, edit the `LlmMetadataProto.pbtext` to drop the punctuation-prefixed
-stop tokens before rebundling — but verify generation still terminates, since those
-variants exist because the tokenizer merges punctuation with the turn marker.
+</details>
 
-### Historical diagnosis
+## Safety
 
-Sending any message (e.g. "hello") kills the app. It is *not* a Dart exception and *not* a
-native crash. Android's own process-exit record is unambiguous:
+- [`CrisisGuard`](lib/services/crisis_guard.dart) — tiered triage. Talk first, helpline
+  last; a companion that answers distress with a phone number has ended the conversation
+- [`LexicalGuard`](lib/services/guard.dart) — screens input narrowly and output for
+  claims of being human, having a body, or giving medical advice
+- Deterministic by design. A classifier model would be a second 15–30 s pass per turn
 
-```
-$ adb shell dumpsys activity exit-info com.sanctuairy.app
-  reason=3 (LOW_MEMORY)  importance=100  rss=6.4GB … 7.4GB
-```
+## Privacy & accounts
 
-Ten consecutive runs, every one `reason=3 (LOW_MEMORY)`.
+Sign-in is **required on Android, optional on iOS** — App Store guideline 5.1.1(v) forbids
+mandatory accounts when core features do not need them.
 
-### The evidence that this is a conversion defect
+What leaves the device is a set of **numbers against a date**: hours the app was open,
+sessions, message count, diary-entry count. Never content. Usage is written to a local
+ledger first so offline use still counts, synced as **absolute per-day totals** (idempotent
+under retry, unlike increments), and deleted locally once the server acknowledges it.
 
-Google's own Gemma 4 E2B `.litertlm` is **the same size as ours** and uses **a quarter of
-the memory** on the same class of hardware:
-
-| | `litert-community/gemma-4-E2B-it-litert-lm` | This model |
-| --- | --- | --- |
-| File size | 2,583 MB | 2,549 MB |
-| **Android CPU peak RSS** | **1,733 MB** | **6,000 – 7,400 MB** |
-| iOS CPU peak RSS | 607 MB | — |
-| Max context | 32,000 tokens | 4,096 |
-| Weights | mixture of 2-bit, 4-bit, 8-bit | uniform ≈int4 |
-
-CPU is the correct, intended backend for `.litertlm` — the official build runs fine there.
-So "use the GPU" is **not** the fix, and in any case this container has no GPU submodel:
-the loader logs `TF_LITE_PREFILL_DECODE not found for backend constraints. Skipping.` and
-`LiteLmEngine.create` on GPU fails with
-`INTERNAL: ERROR: [llm_litert_compiled_model_executor.cc:1955]`.
-
-Measured resident-set growth during load (Nothing Phone A059P, Android 16, 11.7 GB RAM,
-arm64):
-
-```
-t=0s    0.39 GB   app idle
-t=15s   1.14 GB   container mmapped, tokenizer + embedder loaded
-t=25s   5.99 GB   XNNPACK delegating the prefill/decode graph
-t=30s   killed
-```
-
-Freeing device memory does not help — with `MemAvailable` at 7.26 GB it still died at
-~6 GB.
-
-### Root cause: the wrong quantization recipe
-
-The export notebook passes:
-
-```python
-quantization_recipe='weight_only_wi4_afp32'
-```
-
-**This is the bug.** `weight_only_*` stores weights at INT4 *on disk* but computes in
-FP32 — so at delegate-init XNNPACK **dequantizes every weight tensor to FP32**, an **8×
-expansion**. `dynamic_*` recipes instead quantize activations on the fly and feed the
-integer weights straight into integer kernels, so weights stay compact in memory.
-
-That exactly explains the otherwise paradoxical symptom — a **small file with a huge
-runtime footprint**:
-
-| | Size |
-| --- | --- |
-| `tf_lite_prefill_decode` on disk (INT4) | 1.16 GB |
-| Same weights dequantized to FP32 | ~9.3 GB |
-| Delegated to XNNPACK | 2459 / 3056 nodes (~80%) |
-| Observed RSS before the kill | 6.0 – 7.4 GB |
-
-and it matches the measured timeline precisely: RSS sits at 1.14 GB until XNNPACK starts
-delegating the prefill/decode graph, then climbs past 6 GB in ten seconds.
-
-Google's documented export command for this exact model passes **no**
-`quantization_recipe` at all, taking the `dynamic_wi8_afp32` default:
-
-```bash
-litert-torch export_hf \
-  --model=google/gemma-4-E2B-it \
-  --output_dir=/tmp/gemma4_2b \
-  --externalize_embedder \
-  --jinja_chat_template_override=litert-community/gemma-4-E2B-it-litert-lm
-```
-
-The notebook matches this except for the added `quantization_recipe` and
-`single_token_embedder`.
-
-### Contributing factors
-
-- **The 2/4/8-bit mobile scheme is not a recipe flag.** Official Gemma 4 E2B reaches
-  ~0.8 GB of resident weights via a **QAT checkpoint**
-  (`google/gemma-4-E2B-it-qat-mobile-transformers`, a hybrid 2-bit/8-bit "wNa8o8" scheme
-  with 2-bit decode layers). No post-training recipe reaches that from the bf16 weights.
-- **Unbounded prefill.** No `prefill_lengths` was passed, giving `prefill_chunk_size: -1`,
-  so the prefill activation buffer is sized for the whole context. Google's example uses
-  `prefill_lengths=[256, 512, 1024]`.
-- **Load-bearing monkey-patches.** The notebook disables abstract-method enforcement and
-  hardcodes the cache length:
-
-  ```python
-  cls.__abstractmethods__ = frozenset()
-  cls.get_max_length = lambda self: 4096
-  ```
-
-  plus a patch to `importlib.metadata.version` to hide the installed `torch` version.
-  These force an exporter that does not properly support this model to run anyway, and are
-  the likely source of the **453 XNNPACK partitions** (a clean conversion delegates in a
-  handful). [litert-torch#994](https://github.com/google-ai-edge/litert-torch/issues/994)
-  reports E-series exports of this kind producing pad tokens or garbage text, so **fixing
-  memory may reveal a second, output-quality problem.**
-
-- **Embeddings were externalized correctly** — `externalize_embedder=True` was passed, and
-  the container does carry separate embedder/PLE sections. This was *not* a fault.
-
-### Plan to fix
-
-1. **Change one word and re-export.** To keep 4-bit weights, switch the prefix rather than
-   dropping the argument:
-
-   ```python
-   quantization_recipe='dynamic_wi4_afp32'   # was: weight_only_wi4_afp32
-   ```
-
-   The bit-width was never the problem — the compute path was:
-
-   | Recipe | On disk | At runtime | Decoder resident |
-   | --- | --- | --- | --- |
-   | `weight_only_wi4_afp32` (current) | INT4 | dequantized to **FP32** | ~9.3 GB |
-   | `dynamic_wi4_afp32` (use this) | INT4 | INT4 → integer kernels | ~1.16 GB |
-   | `dynamic_wi8_afp32` (the default) | INT8 | INT8 → integer kernels | ~2.3 GB |
-
-   XNNPACK has native `qd8-f32-qc4w` kernels that consume 4-bit weights directly, so
-   nothing upconverts. Because the disk format is already INT4, **the file should stay
-   ~2.5 GB while RSS drops to ~1.5–2 GB** — if the file jumps to ~3.7 GB you have landed on
-   `wi8` by mistake. Cheapest possible test; everything else is secondary.
-2. **Add bounded prefill and an explicit cache length**, e.g.
-   `prefill_lengths=[128, 256, 512]` and `cache_length=2048`, which is ample for a
-   companion chat and shrinks the KV cache from the current 4096.
-3. **Remove the monkey-patches** by pinning matching `litert-torch` / `torch` versions
-   rather than suppressing the version check and the abstract-method guard. If the export
-   cannot run without them, the toolchain does not support this model and needs upgrading.
-4. **Sanity-check the artifact before flashing it.** In the `tflite` log the partition
-   count for the main subgraph should drop from 453 to single digits; on device, peak RSS
-   should land near 1.7 GB.
-5. **Validate output quality separately.** Given #994, confirm the model emits coherent
-   text, not pad tokens — a memory fix does not guarantee a working model. If output is
-   garbled, temporarily switch to `dynamic_wi8_afp32` as a *diagnostic* to isolate whether
-   4-bit quantization is degrading the fine-tune or the export toolchain is at fault. That
-   costs ~1 GB more RSS, which is affordable at 1.7 GB but not at 7 GB.
-6. **If the footprint is still too high**, fine-tune from
-   `google/gemma-4-E2B-it-qat-mobile-transformers` instead of the bf16 checkpoint to
-   inherit the official 2/4/8-bit mobile scheme.
-
-No app changes are needed; `LiteRtService` already defaults to CPU.
-
-### Still open
-
-1. The chat template used **during training**. The container's template was overridden with
-   the official `litert-community/gemma-4-E2B-it-litert-lm` one (`<|turn>` tags). If the
-   fine-tune was trained on different turn markers, the model is being served in a format
-   it never saw — which would degrade responses independently of everything above.
-2. Whether LoRA adapters were merged (`merge_and_unload()`) before the checkpoint was
-   pushed to `Padmanava/gemma_4_mobile_project`.
-3. Whether this `.litertlm` has ever emitted a coherent token on any device.
+Full policy: [docs/PRIVACY.md](docs/PRIVACY.md) · Rules: [firebase/firestore.rules](firebase/firestore.rules)
 
 ## Development
 
-### Build and install
-
 ```bash
 flutter pub get
-flutter build apk --debug
-adb install -r build/app/outputs/flutter-apk/app-debug.apk
+flutter test                  # 214 tests
+flutter build apk --release
+adb install -r build/app/outputs/flutter-apk/app-release.apk
 ```
 
-### Debugging the model path
+**Requirements** — Flutter 3.44+, Android SDK 36, NDK 28.2.13676358, `minSdk 24`, arm64.
+Firebase is optional: without `android/app/google-services.json` the Gradle plugin is
+skipped and the app runs local-only.
 
-`LiteRtService.logToFile()` appends stage-by-stage progress to
-`/sdcard/Download/sanctuary_crash_log.txt`. Because an OOM kill produces **no** Dart stack
-trace and **no** tombstone, this file is the most reliable way to see how far
-initialization got:
+<details>
+<summary><strong>Debugging on device</strong></summary>
 
-```bash
-adb shell cat /sdcard/Download/sanctuary_crash_log.txt
-```
-
-When the app disappears, check the exit reason first — it distinguishes an OOM kill from a
-real native crash:
+An OOM kill produces no Dart stack trace and no tombstone, so check the exit reason first:
 
 ```bash
-adb shell dumpsys activity exit-info com.sanctuairy.app
-```
-
-### Measuring model memory off-device
-
-The LiteRT-LM Python API runs the same `.litertlm` on a workstation, which is a far faster
-loop than a 2.5 GB push. Install with `pip install litert-lm-api`.
-
-**Do not use `resource.getrusage().ru_maxrss` for this.** Under cgroup v2 it reports the
-allocated cgroup memory rather than actual usage — on a Kaggle TPU VM it read a constant
-`57784 MB` at every checkpoint while real usage went 68 → 322 → 1543 MB. Read
-`/proc/self/status` (`VmRSS`, `VmHWM`) and `/proc/self/smaps_rollup` (`Anonymous`) instead.
-`Anonymous` is the figure that predicts device behaviour, since file-backed mmap pages are
-evictable but repacked weights are not.
-
-To watch memory climb in real time:
-
-```bash
+adb shell dumpsys activity exit-info com.sanctuairy.app     # reason=3 is LOW_MEMORY
 adb shell "grep VmRSS /proc/$(adb shell pidof com.sanctuairy.app)/status"
-```
-
-The LiteRT-LM engine logs under the `native`, `litert` and `tflite` tags. The
-`Replacing N out of M node(s) … yielding P partitions` lines are the ones to watch for
-conversion quality:
-
-```bash
 adb logcat -v threadtime | grep -E "native|litert|tflite"
 ```
 
-### Requirements
+`LiteRtService.logToFile()` appends engine progress to app-private storage.
 
-- Flutter SDK 3.29+, Android SDK 36, NDK 28.2.13676358
-- `minSdk 24`, arm64 device
-- `android:largeHeap="true"` is set, but note it only raises the **Java** heap ceiling —
-  it has no effect on the native allocations that dominate here.
+Measuring off-device with `pip install litert-lm-api` is a far faster loop than a 2.5 GB
+push — but **do not use `resource.getrusage().ru_maxrss`**: under cgroup v2 it reports
+allocated cgroup memory, not usage. Read `/proc/self/status` and `/proc/self/smaps_rollup`
+instead; `Anonymous` is the figure that predicts device behaviour, since file-backed mmap
+pages are evictable and repacked weights are not.
+
+</details>
+
+## Documentation
+
+| | |
+| --- | --- |
+| [docs/RELEASE.md](docs/RELEASE.md) | Shipping: signing, model hosting, Firebase, Play |
+| [docs/PRIVACY.md](docs/PRIVACY.md) | Privacy policy |
+| [docs/MEMORY_GRAPH_ARCHITECTURE.md](docs/MEMORY_GRAPH_ARCHITECTURE.md) | Memory design |
+| [ROADMAP.md](ROADMAP.md) | What is done and what is next |
 
 ## References
 
-- [Blazing fast on-device GenAI with LiteRT-LM](https://developers.googleblog.com/blazing-fast-on-device-genai-with-litert-lm/) — PLE/embedding memory-mapping behaviour
-- [litert-community/gemma-4-E2B-it-litert-lm](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm) — official size and per-platform peak-memory table
-- [Gemma 4 on LiteRT-LM](https://developers.google.com/edge/litert-lm/models/gemma-4) — the official `export_hf` command for this model
-- [Convert PyTorch GenAI models for on-device inference](https://developers.google.com/edge/litert/conversion/pytorch/genai) — `litert-torch export_hf` flags and the `dynamic_wi8_afp32` default
-- [ai-edge-quantizer](https://github.com/google-ai-edge/ai-edge-quantizer) — recipe names (`DYNAMIC_WI4_AFP32` vs `WEIGHTONLY_WI4_AFP32`)
-- [google/gemma-4-E2B-it-qat-mobile-transformers](https://huggingface.co/google/gemma-4-E2B-it-qat-mobile-transformers) — QAT checkpoint behind the official 2/4/8-bit mobile footprint
-- [litert-torch#994](https://github.com/google-ai-edge/litert-torch/issues/994) — E-series exports producing pad tokens / garbage
-- [How to convert Gemma-4 to litertlm](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/discussions/7) — merging LoRA before export
+- [Blazing fast on-device GenAI with LiteRT-LM](https://developers.googleblog.com/blazing-fast-on-device-genai-with-litert-lm/) — PLE memory-mapping behaviour
+- [litert-community/gemma-4-E2B-it-litert-lm](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm) — official per-platform peak-memory table
+- [Gemma 4 on LiteRT-LM](https://developers.google.com/edge/litert-lm/models/gemma-4) — the official `export_hf` command
+- [ai-edge-quantizer](https://github.com/google-ai-edge/ai-edge-quantizer) — `DYNAMIC_WI4_AFP32` vs `WEIGHTONLY_WI4_AFP32`
+- [litert-torch#994](https://github.com/google-ai-edge/litert-torch/issues/994) — E-series exports producing pad tokens
+
+## License
+
+[MIT](LICENSE) © 2026 Padmanava Pal
+
+Gemma is provided by Google under the [Gemma Terms of Use](https://ai.google.dev/gemma/terms).
+Fonts (Caprasimo, Figtree) ship under the SIL Open Font License; texts are in
+[assets/fonts](assets/fonts).
