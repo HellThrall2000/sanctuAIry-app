@@ -93,4 +93,16 @@ class ContextBudget {
   /// Below this much room for history, the companion has no continuity worth
   /// the name and something upstream needs to shrink.
   static const int minimumHistoryTokens = 400;
+
+  /// A stand-in prompt size, for budgeting before the prompt exists.
+  ///
+  /// The conversation is opened when the app starts, but the message that will
+  /// be sent into it is not known until the user writes one — and by then the
+  /// history has already been prefilled. Sizing the resume window against zero
+  /// fills the window with old turns and leaves nowhere to put the new one.
+  ///
+  /// 2400 characters is not a guess: it is the size of the prompt that actually
+  /// overflowed on device, a long user message plus the retrieved-episode,
+  /// recalled-fact and mood-cue blocks that ride with it.
+  static const int assumedPromptChars = 2400;
 }

@@ -1,0 +1,67 @@
+[
+  {
+    "_comment": "Give Flutter time to render its first frame. Robo starts crawling immediately and a Flutter app is a blank canvas for the first second or two, which it reads as 'nothing to do' and ends the crawl.",
+    "eventType": "DELAYED_MESSAGE_POSTED",
+    "delayTime": 8000,
+    "crawlStage": "crawl"
+  },
+  {
+    "_comment": "Accept the terms. The checkbox is a Flutter Checkbox, exposed to the accessibility tree; Robo binds it by the label text next to it rather than a resource id, because Flutter has none.",
+    "eventType": "VIEW_CLICKED",
+    "crawlStage": "crawl",
+    "elementDescriptors": [
+      {
+        "className": "android.widget.CheckBox",
+        "groupViewChildPosition": -1,
+        "recyclerViewChildPosition": -1,
+        "adapterViewChildPosition": -1
+      }
+    ]
+  },
+  {
+    "_comment": "Open the Terms and Privacy dialog, which is reachable without an account and is worth crawling.",
+    "eventType": "VIEW_CLICKED",
+    "crawlStage": "crawl",
+    "elementDescriptors": [
+      {
+        "contentDescription": "Terms and Privacy Policy",
+        "groupViewChildPosition": -1,
+        "recyclerViewChildPosition": -1,
+        "adapterViewChildPosition": -1
+      }
+    ]
+  },
+  {
+    "eventType": "DELAYED_MESSAGE_POSTED",
+    "delayTime": 3000,
+    "crawlStage": "crawl"
+  },
+  {
+    "_comment": "Close it again.",
+    "eventType": "PRESSED_BACK",
+    "crawlStage": "crawl"
+  },
+  {
+    "_comment": "Attempt sign-in. On a Test Lab device with no Google account this fails and the app shows an error rather than proceeding — see the blocker note in docs/RELEASE.md. Included so the crawl exercises the failure path, which is worth knowing does not crash.",
+    "eventType": "VIEW_CLICKED",
+    "crawlStage": "crawl",
+    "elementDescriptors": [
+      {
+        "contentDescription": "Sign in with Google",
+        "groupViewChildPosition": -1,
+        "recyclerViewChildPosition": -1,
+        "adapterViewChildPosition": -1
+      }
+    ]
+  },
+  {
+    "eventType": "DELAYED_MESSAGE_POSTED",
+    "delayTime": 10000,
+    "crawlStage": "crawl"
+  },
+  {
+    "_comment": "Everything past this point requires an account. Without the bypass flag the crawl ends here.",
+    "eventType": "ALL_ACTIONS_COMPLETED",
+    "crawlStage": "crawl"
+  }
+]

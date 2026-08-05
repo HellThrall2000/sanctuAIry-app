@@ -33,7 +33,7 @@ class DatabaseService {
 
     final db = await openDatabase(
       path,
-      version: 3,
+      version: 4,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -126,15 +126,37 @@ class DatabaseService {
   /// Migrations are strictly additive.
   ///
   /// v1 -> v2 adds the memory cache. v2 -> v3 adds the conversation log,
-  /// episodic chunks, the relationship log and upcoming events. Existing
-  /// journals and facts are untouched: this is a user's private diary and a
-  /// migration that drops it is unrecoverable.
+  /// episodic chunks, the relationship log and upcoming events. v3 -> v4 adds
+  /// `chat_messages.replyToId`, so a reply can name the message it answers.
+  /// Existing journals and facts are untouched: this is a user's private diary
+  /// and a migration that drops it is unrecoverable.
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
       await _createMemoryTable(db);
     }
     if (oldVersion < 3) {
       await _createCompanionTables(db);
+    }
+    if (oldVersion < 4) {
+      await _addReplyToColumn(db);
+    }
+  }
+
+  /// Adds `chat_messages.replyToId` to a database created before v4.
+  ///
+  /// Guarded and swallowed rather than left to throw. A migration that fails
+  /// takes the whole `onUpgrade` transaction down with it and leaves the app
+  /// unable to open its own database — which is exactly how the FTS5 index once
+  /// bricked this schema, and the reason nothing failable is allowed in here.
+  /// Losing the quoted-reply link is a cosmetic loss; losing the diary is not.
+  static Future<void> _addReplyToColumn(Database db) async {
+    try {
+      final columns = await db.rawQuery('PRAGMA table_info(chat_messages)');
+      final present = columns.any((c) => c['name'] == 'replyToId');
+      if (present) return;
+      await db.execute('ALTER TABLE chat_messages ADD COLUMN replyToId TEXT');
+    } catch (e) {
+      debugPrint('Could not add replyToId; replies will not quote: $e');
     }
   }
 
@@ -160,7 +182,8 @@ class DatabaseService {
         createdAt TEXT NOT NULL,
         moodLabel TEXT,
         moodScore REAL,
-        sentToModel INTEGER NOT NULL DEFAULT 1
+        sentToModel INTEGER NOT NULL DEFAULT 1,
+        replyToId TEXT
       )
     ''');
     await db.execute(
