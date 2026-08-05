@@ -61,6 +61,19 @@ class ChatMessage {
   /// Only meaningful on [ChatRole.user] messages.
   final MessageDelivery delivery;
 
+  /// The [id] of the message this one answers, or null for the ordinary case.
+  ///
+  /// Set only on [ChatRole.companion] turns, and only when the reply is not
+  /// simply an answer to the line directly above it — after a restart, or when
+  /// the user sent a run of messages faster than the companion could reply. In
+  /// a straight back-and-forth the target is obvious and quoting it is noise,
+  /// which is why this is nullable rather than always populated.
+  ///
+  /// Not a foreign key. Deleting a single message is a user action and must not
+  /// cascade into rewriting replies that referred to it; a dangling id simply
+  /// renders without a quote.
+  final String? replyToId;
+
   const ChatMessage({
     required this.id,
     required this.role,
@@ -69,6 +82,7 @@ class ChatMessage {
     this.mood,
     this.sentToModel = true,
     this.delivery = MessageDelivery.read,
+    this.replyToId,
   });
 
   bool get isUser => role == ChatRole.user;
@@ -77,6 +91,7 @@ class ChatMessage {
     String? text,
     MoodReading? mood,
     MessageDelivery? delivery,
+    String? replyToId,
   }) =>
       ChatMessage(
         id: id,
@@ -86,6 +101,7 @@ class ChatMessage {
         mood: mood ?? this.mood,
         sentToModel: sentToModel,
         delivery: delivery ?? this.delivery,
+        replyToId: replyToId ?? this.replyToId,
       );
 
   Map<String, Object?> toMap() => {
@@ -96,6 +112,7 @@ class ChatMessage {
         'moodLabel': mood?.label.name,
         'moodScore': mood?.valence,
         'sentToModel': sentToModel ? 1 : 0,
+        'replyToId': replyToId,
       };
 
   factory ChatMessage.fromMap(Map<String, Object?> map) {
@@ -114,6 +131,9 @@ class ChatMessage {
               valence: score?.toDouble() ?? 0,
             ),
       sentToModel: (map['sentToModel'] as int? ?? 1) == 1,
+      // Absent on rows written before v4, and absent entirely if that migration
+      // was skipped — see `DatabaseService._addReplyToColumn`.
+      replyToId: map['replyToId'] as String?,
     );
   }
 }

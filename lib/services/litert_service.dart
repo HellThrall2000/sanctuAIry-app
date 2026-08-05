@@ -307,18 +307,53 @@ class LiteRtService {
     logToFile("Starting sendMessageStream for prompt length: ${prompt.length}");
     return _conversation!.sendMessageStream(prompt).map((msg) {
       return msg.text;
-    }).handleError((err, stack) {
+    }).handleError((Object err, StackTrace stack) {
+      // Logged *and* rethrown. Swallowing it here was how a hard runtime
+      // failure became invisible: the stream simply ended with no chunks, the
+      // caller received an empty string instead of an exception, and the
+      // message stayed on two grey ticks forever because the error path that
+      // resolves the tick was never entered. Observed on device as
+      // `Input token ids are too long: 4241 >= 4096` — a fatal overflow that
+      // reached the user as silence.
       logToFile("Stream Error: $err\nStack: $stack");
+      Error.throwWithStackTrace(err, stack);
     });
+  }
+
+  /// Whether [error] is the runtime refusing a prompt that will not fit.
+  ///
+  /// The message is matched rather than a type, because it arrives as a generic
+  /// `PlatformException` carrying the JNI text — there is no distinct exception
+  /// class to catch. Worth singling out: it is the one inference failure that is
+  /// fully recoverable, by rebuilding the conversation smaller and retrying.
+  static bool isContextOverflow(Object error) {
+    final text = error.toString();
+    return text.contains('Input token ids are too long') ||
+        text.contains('Exceeding the maximum number of tokens');
   }
 
   /// Disposes any current conversation and opens a new one with a fresh seed.
   ///
-  /// [history] is appended to the persona exemplars, so passing the transcript
-  /// so far reconstructs an equivalent conversation. Returns the seed used, for
-  /// logging. Callers must have checked [_engine] is non-null.
+  /// **[history] replaces the opening messages; it is not added to them.** It
+  /// used to be concatenated — `[...?_initialMessages, ...history]` — and that
+  /// was a context leak with no way to close it. `_initialMessages` is set once
+  /// in [initializeModel] and never cleared, and on a warm start it holds the
+  /// restored conversation, so every later reseed silently re-prefilled those
+  /// turns underneath whatever it was handed. Compaction reseeds in order to
+  /// *shrink* the window; concatenating made it grow instead, and the rebuilt
+  /// conversation overflowed 4096 and failed outright. Whatever a caller passes
+  /// here is the conversation, entire.
+  ///
+  /// Passing `null` — not an empty list — keeps [_initialMessages], which is
+  /// what [reconfigure] wants: no history to preserve, and the persona
+  /// exemplars should come back. An *empty* list is a caller deliberately
+  /// asking for a conversation with nothing in it, which is the last resort
+  /// when a prompt will not fit alongside any history at all.
+  ///
+  /// Returns the seed used, for logging. Callers must have checked [_engine] is
+  /// non-null.
   Future<int> _openConversation({
-    List<LiteLmMessage> history = const [],
+    List<LiteLmMessage>? history,
     double temperatureMultiplier = 1.0,
   }) async {
     final base = _settings ?? ModelSettings();
@@ -333,7 +368,7 @@ class LiteRtService {
     _conversation = await _engine!.createConversation(
       LiteLmConversationConfig(
         systemInstruction: _systemInstruction,
-        initialMessages: [...?_initialMessages, ...history],
+        initialMessages: history ?? [...?_initialMessages],
         samplerConfig: LiteLmSamplerConfig(
           topK: settings.topK,
           topP: settings.topP,
@@ -400,6 +435,10 @@ class LiteRtService {
         history: history,
         temperatureMultiplier: temperatureMultiplier,
       );
+      // The engine's idea of what it opened with now matches reality. Without
+      // this, a later `reconfigure` would resurrect the turns this reseed was
+      // called to get rid of.
+      _initialMessages = history;
       await logToFile("Reseeded conversation (seed=$seed, "
           "${history.length} replayed turns, "
           "temp x$temperatureMultiplier).");

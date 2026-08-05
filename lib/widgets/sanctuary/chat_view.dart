@@ -291,7 +291,7 @@ class _ChatViewState extends State<ChatView> {
     final mood = last.mood ?? SentimentAnalyzer.read(last.text);
 
     setState(() => _isGenerating = true);
-    await _respondTo(last, mood);
+    await _respondTo(last, mood, afterRestart: true);
   }
 
   /// Shows a check-in if the user has been away long enough to warrant one.
@@ -331,10 +331,25 @@ class _ChatViewState extends State<ChatView> {
   /// prefilled into the engine.
   List<LiteLmMessage> _resumeHistory() {
     const limit = _resumeExchanges * 2;
-    return _modelTranscript.length <= limit
+    final recent = _modelTranscript.length <= limit
         ? List.of(_modelTranscript)
         : _modelTranscript.sublist(_modelTranscript.length - limit);
+
+    // Six exchanges is a count, not a size, and six long ones do not fit. On
+    // device this prefilled ~1300 tokens of history before a word was typed,
+    // which the budget never saw because it only ever measured what it was
+    // about to add. Bound it the same way everything else is bounded.
+    return _withinBudget(recent, _budgetForHistory(null));
   }
+
+  /// Tokens left for conversation history once the fixed costs are counted.
+  ///
+  /// [prompt] is the turn about to be sent, or null when budgeting before one
+  /// exists — see [ContextBudget.assumedPromptChars].
+  int _budgetForHistory(String? prompt) => ContextBudget.availableForHistory(
+        systemInstructionChars: _buildSystemInstruction()?.length ?? 0,
+        promptChars: prompt?.length ?? ContextBudget.assumedPromptChars,
+      );
 
   /// Restores tick state without storing it.
   ///
@@ -491,7 +506,15 @@ class _ChatViewState extends State<ChatView> {
   /// guards, memory, context budget, generation, repair — serves both a message
   /// just typed and one left unanswered when the app closed. Two code paths
   /// would drift, and the one that drifted would be the rarely-exercised one.
-  Future<void> _respondTo(ChatMessage userMessage, MoodReading mood) async {
+  ///
+  /// [afterRestart] marks the second case — the reply is arriving in a session
+  /// the user did not watch it being written in, which is what decides whether
+  /// it quotes the message it answers. See [_shouldQuote].
+  Future<void> _respondTo(
+    ChatMessage userMessage,
+    MoodReading mood, {
+    bool afterRestart = false,
+  }) async {
     final prompt = userMessage.text;
 
     // Only an *unambiguous* statement of intent short-circuits: no model, no
@@ -675,7 +698,10 @@ class _ChatViewState extends State<ChatView> {
 
     String reply;
     try {
-      reply = await _generate(fullPrompt);
+      reply = await _generateWithinWindow(
+        fullPrompt,
+        onStart: () => _beginTyping(userMessage.id),
+      );
 
       // The sampler seed is fixed for the life of a conversation, so a reply
       // that has already been given will keep being given. Rebuilding on a
@@ -695,9 +721,13 @@ class _ChatViewState extends State<ChatView> {
       // the model's distribution rather than the seed, and a third attempt just
       // costs the user another re-prefill.
       if (_isRepeat(reply) || !ReplySanitizer.cleanDetailed(reply).isUsable) {
-        final err = await _liteRtService.reseed(history: _replayHistory());
+        final err =
+            await _liteRtService.reseed(history: _replayHistory(fullPrompt));
         if (err == null && mounted) {
-          final retry = await _generate(fullPrompt);
+          final retry = await _generateWithinWindow(
+            fullPrompt,
+            onStart: () => _beginTyping(userMessage.id),
+          );
           // Keep the retry only if it is actually better. A worse second
           // attempt should not replace a usable first one.
           if (ReplySanitizer.cleanDetailed(retry).isUsable ||
@@ -711,6 +741,9 @@ class _ChatViewState extends State<ChatView> {
       // Otherwise this one stalls on two grey ticks — delivery was already set
       // to `processing` before generation began.
       _setDelivery(userMessage.id, MessageDelivery.read);
+      // A failure after the first token leaves the dots animating over a reply
+      // that is never coming.
+      _clearTypingSlot();
       await _emitSystem('Something went wrong during inference: $err');
       setState(() => _isGenerating = false);
       return;
@@ -732,13 +765,12 @@ class _ChatViewState extends State<ChatView> {
       reply = outputVerdict.replacement!;
     }
 
-    // Blue: the reply exists. Only now does the companion appear to start
-    // typing — the order matters, because "read, then typing, then a message"
-    // is the sequence a person produces, and the old behaviour (typing dots
-    // appearing the instant you hit send, then a reply assembling itself word
-    // by word) is the sequence a machine produces.
+    // Both already happened, at the first token — see [_beginTyping]. This is
+    // the backstop for the paths that reach here without one: a reply repaired
+    // from an empty generation, or a guard replacement. Setting a delivery that
+    // is already `read` is a no-op.
     _setDelivery(userMessage.id, MessageDelivery.read);
-    await _showTyping(reply);
+    await _settleTyping();
     if (!mounted) return;
 
     final replyMessage = ChatMessage(
@@ -746,12 +778,12 @@ class _ChatViewState extends State<ChatView> {
       role: ChatRole.companion,
       text: reply,
       createdAt: DateTime.now(),
+      replyToId: _shouldQuote(userMessage, afterRestart: afterRestart)
+          ? userMessage.id
+          : null,
     );
-    setState(() {
-      _messages
-        ..removeWhere((m) => m.id == _typingSlotId)
-        ..add(replyMessage);
-    });
+    _clearTypingSlot();
+    setState(() => _messages.add(replyMessage));
     _scrollToBottom();
     await _chatStore.append(replyMessage);
 
@@ -825,14 +857,28 @@ class _ChatViewState extends State<ChatView> {
   /// The id of the transient "…" bubble, if one is showing.
   String? _typingSlotId;
 
-  /// Shows the typing indicator for a believable length of time.
+  /// When the typing indicator went up, for [_settleTyping].
+  DateTime? _typingStartedAt;
+
+  /// Marks the message read and starts the typing indicator.
   ///
-  /// The reply is already complete when this runs — this is purely the pause
-  /// before it lands. Scaled by length, because a paragraph arriving as fast as
-  /// "yeah, same" is the tell that nobody is really there. Bounded at both
-  /// ends: under [_typingMin] it flickers, and past [_typingMax] the user is
-  /// being made to wait for a message that already exists.
-  Future<void> _showTyping(String reply) async {
+  /// Called from [_generate] on the first chunk, so both signals mean the same
+  /// thing: **the companion is writing, right now.** They used to fire on
+  /// completion instead, which put them in the wrong place — the ticks turned
+  /// blue and the dots appeared after the reply already existed, so the dots
+  /// were an animation of nothing and the long, genuinely uncertain wait was
+  /// the part with no feedback at all. Two pale ticks now cover exactly the
+  /// stretch where the model has the message but has not started, and blue
+  /// covers exactly the stretch where it is producing text.
+  ///
+  /// Idempotent: the repeat-breaker and the overflow recovery both call
+  /// [_generate] a second time, and the companion does not stop writing in
+  /// between.
+  void _beginTyping(String userMessageId) {
+    if (!mounted || _typingSlotId != null) return;
+
+    _setDelivery(userMessageId, MessageDelivery.read);
+
     final slot = ChatMessage(
       id: _newId(),
       role: ChatRole.companion,
@@ -841,17 +887,37 @@ class _ChatViewState extends State<ChatView> {
       sentToModel: false,
     );
     _typingSlotId = slot.id;
-    if (!mounted) return;
+    _typingStartedAt = DateTime.now();
     setState(() => _messages.add(slot));
     _scrollToBottom();
+  }
 
-    final ms = (_typingMin.inMilliseconds + reply.length * 11)
-        .clamp(_typingMin.inMilliseconds, _typingMax.inMilliseconds);
-    await Future.delayed(Duration(milliseconds: ms));
+  /// Holds the indicator on screen long enough to have been seen.
+  ///
+  /// Generation takes tens of seconds, so in practice this waits for nothing.
+  /// It exists for the paths that finish almost immediately — a cached refusal,
+  /// a reply cut short by the loop detector — where dots that appear and vanish
+  /// inside one frame read as a glitch rather than as thinking.
+  Future<void> _settleTyping() async {
+    final since = _typingStartedAt;
+    if (since == null) return;
+    final shown = DateTime.now().difference(since);
+    if (shown < _typingMin) await Future.delayed(_typingMin - shown);
+  }
+
+  /// Takes the "…" bubble down, wherever the turn ended.
+  ///
+  /// Also clears the id, which the old code did not — leaving it set made
+  /// [_beginTyping] a no-op forever after the first reply.
+  void _clearTypingSlot() {
+    final slot = _typingSlotId;
+    _typingSlotId = null;
+    _typingStartedAt = null;
+    if (slot == null || !mounted) return;
+    setState(() => _messages.removeWhere((m) => m.id == slot));
   }
 
   static const Duration _typingMin = Duration(milliseconds: 700);
-  static const Duration _typingMax = Duration(milliseconds: 2600);
 
   /// Streams one reply into the last message slot, completing with the raw text.
   ///
@@ -859,10 +925,16 @@ class _ChatViewState extends State<ChatView> {
   /// accumulated text, so `_comma_` artifacts never reach the screen. The raw
   /// text is what completes, because that is what the model actually said and
   /// what repeat detection and the replay transcript should be based on.
-  Future<String> _generate(String prompt) {
+  /// [onStart] fires the moment the model has actually produced something —
+  /// the first chunk with text in it. That is the only honest signal that
+  /// generation began: the runtime can accept a prompt and then fail before
+  /// emitting a token, so anything earlier would be a promise the app cannot
+  /// keep.
+  Future<String> _generate(String prompt, {VoidCallback? onStart}) {
     final completer = Completer<String>();
     final buffer = StringBuffer();
     StreamSubscription<String>? subscription;
+    var started = false;
 
     // Both of these exist only for the fine-tune's defects, so on stock they
     // are skipped entirely rather than run to no effect. See
@@ -884,6 +956,10 @@ class _ChatViewState extends State<ChatView> {
     subscription = _liteRtService.generateResponseStream(prompt).listen(
       (chunk) {
         buffer.write(chunk);
+        if (!started && buffer.isNotEmpty) {
+          started = true;
+          onStart?.call();
+        }
         // Once it is repeating there is nothing left to wait for — it will run
         // to the token limit saying the same thing. Cutting it short saves the
         // user waiting out the rest of a generation that has nothing to add.
@@ -961,7 +1037,7 @@ class _ChatViewState extends State<ChatView> {
   /// So exchanges are dropped when the companion's reply repeats the substance
   /// of an earlier one, keeping the first occurrence. Whole exchanges rather
   /// than lone replies, to leave user turns paired with an answer.
-  List<LiteLmMessage> _replayHistory() {
+  List<LiteLmMessage> _replayHistory(String prompt) {
     final kept = <LiteLmMessage>[];
     final seen = <String>{};
 
@@ -975,7 +1051,13 @@ class _ChatViewState extends State<ChatView> {
     }
 
     const limit = _replayExchangeLimit * 2;
-    return kept.length <= limit ? kept : kept.sublist(kept.length - limit);
+    final capped =
+        kept.length <= limit ? kept : kept.sublist(kept.length - limit);
+
+    // Twelve exchanges is a count, and the window is measured in tokens. This
+    // reseed happens mid-turn with the prompt already in hand, so there is no
+    // excuse for guessing at what fits.
+    return _withinBudget(capped, _budgetForHistory(prompt));
   }
 
   /// The most recent exchanges that fit the context window, newest kept.
@@ -983,27 +1065,41 @@ class _ChatViewState extends State<ChatView> {
   /// Whole exchanges, so a user turn is never left without the reply it
   /// received — a dangling question reads to the model as one it still has to
   /// answer.
-  List<LiteLmMessage> _historyWithinBudget(int budgetTokens) {
-    if (_modelTranscript.length < 2) return const [];
+  List<LiteLmMessage> _historyWithinBudget(int budgetTokens) =>
+      _withinBudget(_modelTranscript, budgetTokens);
+
+  /// [turns] reduced to the most recent whole exchanges that fit
+  /// [budgetTokens].
+  ///
+  /// Applied to *every* list of turns handed to the engine, because a reseed
+  /// rebuilds the conversation from exactly what it is given — so any unbounded
+  /// list is an unbounded context window. Both callers used to be unbounded in
+  /// their own way: the resume window was a fixed six exchanges regardless of
+  /// how long each one was, and the repeat-breaker replayed up to twelve.
+  static List<LiteLmMessage> _withinBudget(
+    List<LiteLmMessage> turns,
+    int budgetTokens,
+  ) {
+    if (turns.length < 2) return const [];
 
     final kept = <LiteLmMessage>[];
     var used = 0;
 
     // Backwards in pairs: recency is what the window is for.
-    for (var i = _modelTranscript.length - 2; i >= 0; i -= 2) {
-      final cost = ContextBudget.estimateTokens(_modelTranscript[i].text) +
-          ContextBudget.estimateTokens(_modelTranscript[i + 1].text);
+    for (var i = turns.length - 2; i >= 0; i -= 2) {
+      final cost = ContextBudget.estimateTokens(turns[i].text) +
+          ContextBudget.estimateTokens(turns[i + 1].text);
 
       // **The newest exchange is kept whatever it costs.** It is the one the
       // next reply actually has to answer — summarising it would compact away
       // the very thing being responded to, and a companion that has forgotten
       // the sentence it is replying to is worse than one that has forgotten
       // last week. Everything above it is fair game for compaction.
-      final isNewest = i == _modelTranscript.length - 2;
+      final isNewest = i == turns.length - 2;
       if (!isNewest && used + cost > budgetTokens) break;
 
       used += cost;
-      kept.insertAll(0, [_modelTranscript[i], _modelTranscript[i + 1]]);
+      kept.insertAll(0, [turns[i], turns[i + 1]]);
     }
     return kept;
   }
@@ -1038,10 +1134,7 @@ class _ChatViewState extends State<ChatView> {
       );
     }
 
-    final budget = ContextBudget.availableForHistory(
-      systemInstructionChars: systemChars,
-      promptChars: prompt.length,
-    );
+    final budget = _budgetForHistory(prompt);
 
     var used = 0;
     for (final message in _modelTranscript) {
@@ -1083,9 +1176,92 @@ class _ChatViewState extends State<ChatView> {
       'keeping ${trimmed.length ~/ 2} exchanges.',
     );
 
-    final err = await _liteRtService.reseed(history: rebuilt);
+    // Sampling stays where it was. `reseed` defaults to the escape multiplier
+    // because its original caller was the repeat-breaker, but running out of
+    // window is not evidence of a peaked distribution — it is just a long
+    // conversation. Widening temperature here would make the companion audibly
+    // stranger every time the context filled, for no reason at all.
+    final err = await _liteRtService.reseed(
+      history: rebuilt,
+      temperatureMultiplier: 1.0,
+    );
     if (err != null) {
       debugPrint('Context compaction failed, continuing uncut: $err');
+    }
+  }
+
+  /// Whether this reply should name the message it answers.
+  ///
+  /// Messaging apps quote sparingly, and for one reason: the message being
+  /// answered is no longer obviously the one above. In a strict back-and-forth
+  /// it always is, so quoting every turn would be clutter on a screen whose
+  /// whole job is to feel calm. Two situations genuinely break that:
+  ///
+  ///  * **[afterRestart]** — the app closed before the reply was written and
+  ///    this is the relaunch answering it. The message can be hours old with a
+  ///    session boundary in between, and an unattributed reply appearing under
+  ///    it reads as the companion raising something new rather than finally
+  ///    getting back to them.
+  ///  * **A run of unanswered turns** — the user kept typing while the model
+  ///    was still loading or still composing, so there are several candidates
+  ///    for what "this" refers to.
+  bool _shouldQuote(ChatMessage target, {required bool afterRestart}) =>
+      afterRestart || _unansweredUserTurns(target) > _quoteAfterUserTurns;
+
+  /// A run of user turns longer than this is treated as ambiguous.
+  ///
+  /// Three is the point at which a reply stops obviously belonging to the line
+  /// above it. Below that, quoting says less than the position already does.
+  static const int _quoteAfterUserTurns = 3;
+
+  /// How many user turns are waiting on a reply, counting back from [target].
+  ///
+  /// App-authored lines are skipped rather than counted or treated as a break:
+  /// a banner or a nudge sitting between two user messages answers neither of
+  /// them, so it must not end the run.
+  int _unansweredUserTurns(ChatMessage target) {
+    final index = _messages.indexWhere((m) => m.id == target.id);
+    if (index < 0) return 1;
+
+    var count = 0;
+    for (var i = index; i >= 0; i--) {
+      final message = _messages[i];
+      if (message.role == ChatRole.companion) break;
+      if (message.isUser) count++;
+    }
+    return count;
+  }
+
+  /// Generates, and if the window overflows anyway, answers from an empty one.
+  ///
+  /// The budget is an estimate. The SentencePiece vocabulary lives inside the
+  /// `.litertlm` and is not reachable from Dart, so [ContextBudget] counts
+  /// characters and divides — which can be wrong in the dangerous direction on
+  /// text that tokenises badly. When it is, the runtime refuses the prompt with
+  /// `Input token ids are too long`, and before this that cost the user the
+  /// turn outright: two grey ticks, no reply, no error on screen. **A companion
+  /// is allowed to forget the conversation. It is not allowed to not answer.**
+  ///
+  /// Dropping the history entirely rather than trimming it again is deliberate.
+  /// Being here means the estimate has already been proved wrong once, so a
+  /// second estimate is not worth betting the reply on. Nothing is destroyed —
+  /// the dropped turns are still in `ChunkStore` and come back through
+  /// retrieval on the next message, which is what episodic memory is for.
+  Future<String> _generateWithinWindow(
+    String prompt, {
+    VoidCallback? onStart,
+  }) async {
+    try {
+      return await _generate(prompt, onStart: onStart);
+    } catch (err) {
+      if (!LiteRtService.isContextOverflow(err)) rethrow;
+      debugPrint('Context overflowed past the budget; answering unaided.');
+      final failed = await _liteRtService.reseed(
+        history: const [],
+        temperatureMultiplier: 1.0,
+      );
+      if (failed != null) rethrow;
+      return _generate(prompt, onStart: onStart);
     }
   }
 
@@ -1242,6 +1418,15 @@ class _ChatViewState extends State<ChatView> {
     }
 
     final isUser = msg.isUser;
+
+    // Resolved by id rather than by position, so deleting or inserting a
+    // message cannot silently re-point a quote at the wrong line. A message
+    // that is no longer there renders as an ordinary reply — see
+    // [ChatMessage.replyToId] for why this is not a foreign key.
+    final quoted = msg.replyToId == null
+        ? null
+        : _messages.where((m) => m.id == msg.replyToId).firstOrNull;
+
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Padding(
@@ -1266,9 +1451,21 @@ class _ChatViewState extends State<ChatView> {
               borderRadius: BorderRadius.circular(s.bubbleRadius),
             ),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
+              // Ticks hang off the right of a user bubble; a quote block spans
+              // the width of a companion one. With a single child these were
+              // indistinguishable, which is why this used to be `.end` for both.
+              crossAxisAlignment:
+                  isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
+                if (quoted != null) ...[
+                  _QuotedMessage(
+                    text: quoted.text,
+                    foreground: t.assistantBubbleFg,
+                    size: s.bubbleFontSize,
+                  ),
+                  const SizedBox(height: 8),
+                ],
                 SelectableText(
                   msg.text,
                   style: OrganicText.bubble(
@@ -1410,6 +1607,78 @@ class _ChatViewState extends State<ChatView> {
 /// two blue once the reply exists. Drawn with Material's `done` / `done_all`
 /// rather than a custom glyph — the shape is the part people recognise, and it
 /// is one they have read a thousand times without being taught.
+/// The message a reply is answering, quoted above it.
+///
+/// Deliberately static — there is no tap target. Making it scroll to the
+/// original would need per-message keys that resolve for items `ListView`
+/// has not built, which this list cannot offer; an affordance that works only
+/// when the target happens to be on screen is worse than none. It costs
+/// little: a quoted message is by construction the one just answered, so it is
+/// almost always a short distance up the same screen.
+///
+/// Never rendered for user bubbles. The companion is the only participant that
+/// can answer out of order.
+class _QuotedMessage extends StatelessWidget {
+  final String text;
+
+  /// The bubble's own foreground, which this tints itself from — so the quote
+  /// reads as a quieter register of the same voice rather than a second colour
+  /// introduced into the palette.
+  final Color foreground;
+
+  final double size;
+
+  const _QuotedMessage({
+    required this.text,
+    required this.foreground,
+    required this.size,
+  });
+
+  /// Two lines is enough to identify a message without repeating it. The point
+  /// is recognition, not re-reading — the original is directly above.
+  static const int _maxLines = 2;
+
+  @override
+  Widget build(BuildContext context) {
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // The accent rule, the one convention every messaging app shares for
+          // this. Stretched to the quote's height by IntrinsicHeight.
+          Container(
+            width: 2.5,
+            decoration: BoxDecoration(
+              color: foreground.withValues(alpha: 0.45),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 1),
+              child: Text(
+                text,
+                maxLines: _maxLines,
+                overflow: TextOverflow.ellipsis,
+                // Not selectable, unlike the reply itself: the quote is a
+                // pointer to text that is already on screen and selectable
+                // there. Two selectable copies of one sentence is a confusing
+                // thing to hand someone.
+                style: OrganicText.bubble(
+                  foreground.withValues(alpha: 0.7),
+                  size: size * 0.88,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _DeliveryTicks extends StatelessWidget {
   final MessageDelivery delivery;
 
