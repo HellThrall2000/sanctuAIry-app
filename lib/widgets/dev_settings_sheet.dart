@@ -12,7 +12,7 @@ import '../theme/tokens.dart';
 class DevSettingsSheet extends StatefulWidget {
   final ModelSettings initial;
 
-  const DevSettingsSheet({Key? key, required this.initial}) : super(key: key);
+  const DevSettingsSheet({super.key, required this.initial});
 
   /// Returns the edited settings, or null if cancelled / not a debug build.
   static Future<ModelSettings?> show(BuildContext context, ModelSettings current) {

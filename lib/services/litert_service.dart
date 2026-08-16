@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_litert_lm/flutter_litert_lm.dart';
+import 'crash_reporter.dart';
 import 'model_download_service.dart';
 import 'model_profile.dart';
 import 'model_settings.dart';
@@ -104,7 +105,7 @@ class LiteRtService {
         }
       } catch (e) {
         // An unreadable directory is expected on scoped storage; keep looking.
-        print("Skipping $dir: $e");
+        debugPrint("Skipping $dir: $e");
       }
     }
 
@@ -239,18 +240,36 @@ class LiteRtService {
       await logToFile("Using tempDir: ${tempDir.path}");
 
       await logToFile("Calling LiteLmEngine.create on ${backend.name}...");
+      // The single riskiest moment in the app. XNNPACK repacks 2.5 GB of
+      // weights into anonymous memory here, and on a device without headroom
+      // the kernel kills the process mid-repack — no exception, no handler, no
+      // Crashlytics report. This breadcrumb, with the free-memory reading it
+      // carries, is the only evidence that survives. See DiagnosticsLog.
+      await CrashReporter.instance.stage(
+        'engine_create',
+        detail: 'backend=${backend.name}',
+      );
       _engine = await LiteLmEngine.create(LiteLmEngineConfig(
         modelPath: path,
         backend: backend,
         cacheDir: tempDir.path,
       ));
+      await CrashReporter.instance.stage('engine_ready');
       await logToFile("Engine created on ${backend.name}. Creating conversation...");
 
       _systemInstruction = systemInstruction;
       _initialMessages = initialMessages;
       _settings = settings.copy();
 
+      // `LiteLmEngine.create` returning does not mean the weights are resident.
+      // Measured on device: it returns in under a second having moved
+      // `MemAvailable` by ~90 MB, while Native Heap ends up near 840 MB — the
+      // rest is committed here and during the first prefill. Marking only the
+      // engine step would report a kill at the true peak as `engine_ready`,
+      // pointing the investigation at the wrong place entirely.
+      await CrashReporter.instance.stage('conversation_open');
       final seed = await _openConversation();
+      await CrashReporter.instance.stage('conversation_ready');
 
       await logToFile("Conversation ready on ${backend.name} "
           "with ${settings.profile.label} "
@@ -263,7 +282,10 @@ class LiteRtService {
       return null;
     } catch (e, stack) {
       final errLog = "Failed to initialize LiteRT model: $e\nStack: $stack";
-      print(errLog);
+      // debugPrint, not print: this is stripped in release, and the durable
+      // copy is the logToFile call on the next line — which is what a tester's
+      // engine.log actually shows.
+      debugPrint(errLog);
       await logToFile(errLog);
       _isInitialized = false;
       return e.toString();
@@ -305,6 +327,13 @@ class LiteRtService {
     }
 
     logToFile("Starting sendMessageStream for prompt length: ${prompt.length}");
+    // Prefill is the true memory peak — the KV cache and the activation buffers
+    // are committed here, on top of the repacked weights. If a device is going
+    // to be killed, this is when.
+    unawaited(CrashReporter.instance.stage(
+      'prefill',
+      detail: 'promptChars=${prompt.length}',
+    ));
     return _conversation!.sendMessageStream(prompt).map((msg) {
       return msg.text;
     }).handleError((Object err, StackTrace stack) {

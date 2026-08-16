@@ -14,12 +14,20 @@ post-compact     = control. Compaction rebuilds the conversation on a trimmed
 Samples only when idle, ~10s after a reply lands: activation buffers are
 transient during generation and would otherwise show up as noise.
 """
+import os
 import re
 import subprocess
 import sys
 import time
 
-ADB = r"C:/AndroidSDK/platform-tools/adb.exe"
+# Derived from the environment rather than hardcoded: the SDK has moved drives
+# once already, and a literal path here silently breaks every measurement script
+# when it does.
+ADB = os.environ.get("ADB") or os.path.join(
+    os.environ.get("ANDROID_HOME") or r"D:\AndroidSDK",
+    "platform-tools",
+    "adb.exe",
+)
 PKG = "com.sanctuairy.app"
 
 # Long enough to fill context quickly, varied enough not to trip the repeat

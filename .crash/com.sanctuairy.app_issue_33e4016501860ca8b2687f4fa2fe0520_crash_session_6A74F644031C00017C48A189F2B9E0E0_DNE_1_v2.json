@@ -1,0 +1,25 @@
+{
+  "title": "Crashlytics - Custom logs",
+  "bundle_identifier": "com.sanctuairy.app",
+  "platform": "android",
+  "display_version": "1.1.0",
+  "build_version": "2",
+  "issue_id": "33e4016501860ca8b2687f4fa2fe0520",
+  "session_id": "6A74F644031C00017C48A189F2B9E0E0_DNE_1_v2",
+  "event_timestamp": "Fri Aug 07 2026 02:32:10 GMT+0530 (India Standard Time)",
+  "logs_and_breadcrumbs": [
+    {
+      "timestamp": "Fri Aug 07 2026 02:32:08 GMT+0530 (India Standard Time)",
+      "name": "screen_view",
+      "source": "analytics",
+      "params": {
+        "firebase_screen_class": "MainActivity"
+      }
+    },
+    {
+      "timestamp": "Fri Aug 07 2026 02:32:08 GMT+0530 (India Standard Time)",
+      "message": "Previous run ended without a clean exit: --- run started 2026-08-07T02:31:44.751040 --- 2026-08-07T02:31:44.758772  stage=app_start  freeRamMb=2157 2026-08-07T02:31:45.254008  stage=engine_create  freeRamMb=2106  backend=cpu 2026-08-07T02:31:46.460333  stage=engine_ready  freeRamMb=1971 2026-08-07T02:31:46.464458  stage=conversation_open  freeRamMb=1971 2026-08-07T02:31:46.477372  stage=conversation_ready  freeRamMb=1970",
+      "source": "crashlytics"
+    }
+  ]
+}

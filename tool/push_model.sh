@@ -14,7 +14,11 @@
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
 
-ADB="${ADB:-/c/AndroidSDK/platform-tools/adb.exe}"
+# ANDROID_HOME is a Windows path here; the ${VAR//\\//} strips the backslashes so
+# Git Bash can execute it. The literal fallback exists for a shell started
+# without the variable set.
+ADB="${ADB:-${ANDROID_HOME:+${ANDROID_HOME//\\//}/platform-tools/adb.exe}}"
+ADB="${ADB:-/d/AndroidSDK/platform-tools/adb.exe}"
 PKG="${PKG:-com.example.sanctuary}"
 DEST="/storage/emulated/0/Android/data/$PKG/files"
 SRC_DIR="$(dirname "$0")/../assets/.aistudio"

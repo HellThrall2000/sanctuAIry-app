@@ -116,6 +116,15 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                   const _Line(
                     'We only record how long the app is used, for analytics.',
                   ),
+                  // Named on the first screen rather than left to the full
+                  // policy. The app's promise is that nothing personal leaves
+                  // the phone, and a crash report is the one thing that does —
+                  // saying so plainly costs one line and keeps the promise
+                  // exact.
+                  const _Line(
+                    'If the app crashes, we get a technical report — never '
+                    'your chats.',
+                  ),
                   const _Line('No private data is kept on our servers.'),
 
                   const SizedBox(height: Organic.space6),
@@ -251,12 +260,18 @@ class _TermsDialog extends StatelessWidget {
     return OrganicDialog(
       title: 'Terms and Privacy',
       maxWidth: 480,
+      actions: [
+        OrganicButton(
+          label: 'Close',
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+      ],
       children: [
         ConstrainedBox(
           constraints: BoxConstraints(
             maxHeight: MediaQuery.sizeOf(context).height * 0.5,
           ),
-          child: SingleChildScrollView(
+          child: const SingleChildScrollView(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -278,7 +293,11 @@ class _TermsDialog extends StatelessWidget {
                   'How often and how long the app is used, and counts of '
                       'messages and diary entries — the numbers only, never '
                       'the content. If you sign in, your Google email and '
-                      'display name.',
+                      'display name.\n\nIf the app crashes, a technical report: '
+                      'the error, where in the code it happened, and the phone '
+                      'model and Android version. It is what lets us fix the '
+                      'fault. It never contains your messages, your diary, or '
+                      'anything the companion remembers.',
                 ),
                 _Section(
                   'What we never collect',
@@ -302,12 +321,6 @@ class _TermsDialog extends StatelessWidget {
               ],
             ),
           ),
-        ),
-      ],
-      actions: [
-        OrganicButton(
-          label: 'Close',
-          onPressed: () => Navigator.of(context).pop(),
         ),
       ],
     );

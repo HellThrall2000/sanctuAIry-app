@@ -2,7 +2,13 @@ name: sanctuary
 description: A beautiful, privacy-first sanctuary featuring a private writing companion, passcode-secured diary lockbox, and custom loopable ambient soundscapes.
 publish_to: 'none'
 
-version: 1.0.0+1
+# Minor rather than patch: this adds quoted replies and crash reporting, not
+# only fixes. The build number is what actually matters day to day — it is the
+# versionCode Play orders uploads by, and the tag every Crashlytics issue is
+# filed under, so it must increase on every build that leaves this machine.
+# Four distinct builds already shipped as `1.0.0+1`, which is why a crash report
+# from a tester currently cannot be traced to the code that produced it.
+version: 1.1.1+3
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -29,12 +35,17 @@ dependencies:
   firebase_core: ^4.12.1
   firebase_auth: ^6.5.6
   firebase_analytics: ^12.4.5
+  # Beta diagnostics. Reports are written locally and uploaded on the next
+  # launch, so nothing here blocks an offline device — see DiagnosticsLog for
+  # the OOM case, which no crash handler can catch.
+  firebase_crashlytics: ^5.0.5
   cloud_firestore: ^6.7.1
   google_sign_in: ^7.2.0
   http: ^1.6.0
   connectivity_plus: ^7.3.1
   package_info_plus: ^9.0.1
 
+  path: any
 dev_dependencies:
   flutter_test:
     sdk: flutter

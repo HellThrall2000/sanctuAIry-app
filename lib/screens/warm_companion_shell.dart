@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../models/journal_entry.dart';
 import '../services/local_profile.dart';
 import '../theme/tokens.dart';
 import '../theme/typography.dart';
@@ -36,7 +35,6 @@ class WarmCompanionShell extends StatefulWidget {
 class _WarmCompanionShellState extends State<WarmCompanionShell> {
   bool _leftOpen = false;
   bool _rightOpen = false;
-  List<JournalEntry> _allowedJournals = const [];
 
   final LocalProfile _profile = LocalProfile.instance;
 
@@ -77,10 +75,9 @@ class _WarmCompanionShellState extends State<WarmCompanionShell> {
           Column(
             children: [
               _header(t),
-              Expanded(
+              const Expanded(
                 child: ChatView(
-                  allowedJournals: _allowedJournals,
-                  style: const ChatViewStyle.warmCompanion(),
+                  style: ChatViewStyle.warmCompanion(),
                 ),
               ),
             ],
@@ -104,10 +101,7 @@ class _WarmCompanionShellState extends State<WarmCompanionShell> {
             width: _rightWidth,
             title: 'Secure Journal Vault',
             onClose: () => setState(() => _rightOpen = false),
-            child: DiaryPanel(
-              onAllowedEntriesChanged: (list) =>
-                  setState(() => _allowedJournals = list),
-            ),
+            child: const DiaryPanel(),
           ),
         ],
       ),

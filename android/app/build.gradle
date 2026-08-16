@@ -15,6 +15,9 @@ plugins {
 // See docs/RELEASE.md.
 if (project.file('google-services.json').exists()) {
     apply plugin: 'com.google.gms.google-services'
+    // Crashlytics is meaningless without a Firebase project to report to, so it
+    // rides on exactly the same condition.
+    apply plugin: 'com.google.firebase.crashlytics'
 } else {
     logger.lifecycle(
         "sanctuAIry: no android/app/google-services.json - building without " +

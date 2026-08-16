@@ -1,0 +1,22 @@
+# Static analysis configuration.
+#
+# `flutter_lints` is declared in pubspec.yaml but was never wired up — without
+# this file none of its rules ran, and `flutter analyze` had no exclusions at
+# all. That second part mattered: a local Flutter SDK checkout lives at
+# `flutter/` (gitignored, redundant with the real SDK in local.properties), and
+# with nothing excluding it a bare `flutter analyze` walked the entire SDK and
+# reported ~86,000 issues in Flutter's own tests. The signal from our code was
+# buried, and a run took seven minutes instead of three seconds.
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  exclude:
+    # Not our code. See above.
+    - flutter/**
+    - build/**
+    - .dart_tool/**
+
+  errors:
+    # Deliberate: several services are singletons whose fields are assigned once
+    # at init and never reassigned, which this rule cannot see through.
+    prefer_final_fields: info

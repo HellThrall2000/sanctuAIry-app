@@ -44,7 +44,7 @@ void main() {
             'Then I realised I had been holding my breath the whole time. '
             'Finally I decided that I would say something honest.',
       ));
-      final content = 'First I felt afraid about the meeting that was coming '
+      const content = 'First I felt afraid about the meeting that was coming '
           'up. Then I realised I had been holding my breath the whole time. '
           'Finally I decided that I would say something honest.';
       var last = -1;

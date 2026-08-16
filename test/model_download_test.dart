@@ -16,7 +16,7 @@ const _configured = ModelRelease(
 void main() {
   group('ModelRelease', () {
     test('the shipped default is a real, downloadable release', () {
-      final model = ModelCatalog.defaultModel;
+      const model = ModelCatalog.defaultModel;
       expect(model.isConfigured, isTrue);
       expect(model.url, startsWith('https://'));
       expect(model.sizeBytes, greaterThan(0));
@@ -29,7 +29,7 @@ void main() {
     });
 
     test('the shipped release is served from R2, with no mirrors', () {
-      final model = ModelCatalog.defaultModel;
+      const model = ModelCatalog.defaultModel;
       expect(model.url, contains('r2.dev'));
       expect(model.mirrors, isEmpty);
       expect(model.sources, [model.url]);

@@ -148,7 +148,7 @@ void main() {
     });
 
     test('LiteLmTool roundtrip', () {
-      final tool = LiteLmTool(
+      const tool = LiteLmTool(
         name: 'test',
         description: 'A test tool',
         parameters: {'type': 'object'},

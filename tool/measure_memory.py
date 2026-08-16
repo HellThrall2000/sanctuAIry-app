@@ -22,12 +22,20 @@ Baseline on a Nothing A059P (Android 16, 11.7 GB) with the current export:
 If a re-export with bounded prefill and a smaller cache is working, Native Heap
 falls. If only RSS moves, nothing real changed.
 """
+import os
 import re
 import subprocess
 import sys
 import time
 
-ADB = r"C:/AndroidSDK/platform-tools/adb.exe"
+# Derived from the environment rather than hardcoded: the SDK has moved drives
+# once already, and a literal path here silently breaks every measurement script
+# when it does.
+ADB = os.environ.get("ADB") or os.path.join(
+    os.environ.get("ANDROID_HOME") or r"D:\AndroidSDK",
+    "platform-tools",
+    "adb.exe",
+)
 PKG = "com.sanctuairy.app"
 SAMPLES = 20
 INTERVAL = 10

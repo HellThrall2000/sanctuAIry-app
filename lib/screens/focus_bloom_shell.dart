@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../models/journal_entry.dart';
 import '../services/local_profile.dart';
 import '../theme/tokens.dart';
 import '../theme/typography.dart';
@@ -35,7 +34,6 @@ enum _Sheet { diary, settings }
 
 class _FocusBloomShellState extends State<FocusBloomShell> {
   _Sheet? _activeSheet;
-  List<JournalEntry> _allowedJournals = const [];
 
   static const _tabBarHeight = 58.0;
   static const _tabBarInset = 16.0;
@@ -66,10 +64,9 @@ class _FocusBloomShellState extends State<FocusBloomShell> {
                 child: Column(
                   children: [
                     _brandBlock(t),
-                    Expanded(
+                    const Expanded(
                       child: ChatView(
-                        allowedJournals: _allowedJournals,
-                        style: const ChatViewStyle.focusBloom(),
+                        style: ChatViewStyle.focusBloom(),
                       ),
                     ),
                   ],
@@ -91,10 +88,7 @@ class _FocusBloomShellState extends State<FocusBloomShell> {
                 open: _activeSheet == _Sheet.diary,
                 height: sheetHeight,
                 title: 'Secure Journal Vault',
-                child: DiaryPanel(
-                  onAllowedEntriesChanged: (list) =>
-                      setState(() => _allowedJournals = list),
-                ),
+                child: const DiaryPanel(),
               ),
               _sheet(
                 open: _activeSheet == _Sheet.settings,

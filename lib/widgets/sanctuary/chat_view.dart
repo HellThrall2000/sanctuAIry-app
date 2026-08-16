@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_litert_lm/flutter_litert_lm.dart';
 
 import '../../models/chat_message.dart';
-import '../../models/journal_entry.dart';
 import '../../models/memory_fact.dart';
 import '../../models/sentiment.dart';
 import '../../services/background_generation.dart';
@@ -110,12 +109,10 @@ class ChatViewStyle {
 /// `ChatScreen`. Only the presentation is new. Each piece of it was arrived at
 /// against a specific on-device failure and the comments record which.
 class ChatView extends StatefulWidget {
-  final List<JournalEntry> allowedJournals;
   final ChatViewStyle style;
 
   const ChatView({
     super.key,
-    required this.allowedJournals,
     required this.style,
   });
 

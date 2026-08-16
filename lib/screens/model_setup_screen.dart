@@ -155,7 +155,7 @@ class _ModelSetupScreenState extends State<ModelSetupScreen> {
 
       case DownloadStage.waitingForWifi:
         return [
-          _Notice(
+          const _Notice(
             tone: _NoticeTone.info,
             title: 'Waiting for Wi-Fi',
             detail: 'Set to Wi-Fi only, to save your mobile data.',
@@ -199,7 +199,7 @@ class _ModelSetupScreenState extends State<ModelSetupScreen> {
 
       case DownloadStage.ready:
         return [
-          _Notice(
+          const _Notice(
             tone: _NoticeTone.info,
             title: 'Ready',
             detail: 'Opening your sanctuary…',
@@ -223,7 +223,7 @@ class _ModelSetupScreenState extends State<ModelSetupScreen> {
         _Row(label: 'Already downloaded', value: _gb(_resumeFrom)),
       const SizedBox(height: Organic.space4),
       if (short)
-        _Notice(
+        const _Notice(
           tone: _NoticeTone.warning,
           title: 'Not much room',
           detail: 'Free up some space first, or the download will not finish.',

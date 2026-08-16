@@ -153,6 +153,15 @@ class _SignInDialogState extends State<SignInDialog> {
       maxWidth: compact ? 340 : 440,
       titleSize: compact ? 17 : 20,
       bodySize: compact ? 12 : 14,
+      actions: [
+        OrganicButton(
+          label: compact ? 'Done' : 'Back to the sanctuary',
+          onPressed: () async {
+            await _saveName();
+            if (context.mounted) Navigator.of(context).pop(true);
+          },
+        ),
+      ],
       children: [
         OrganicField(
           label: 'What should the companion call you?',
@@ -209,15 +218,6 @@ class _SignInDialogState extends State<SignInDialog> {
             ],
           ),
         ],
-      ],
-      actions: [
-        OrganicButton(
-          label: compact ? 'Done' : 'Back to the sanctuary',
-          onPressed: () async {
-            await _saveName();
-            if (context.mounted) Navigator.of(context).pop(true);
-          },
-        ),
       ],
     );
   }

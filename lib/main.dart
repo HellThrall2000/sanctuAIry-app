@@ -8,6 +8,8 @@ import 'screens/model_setup_screen.dart';
 import 'screens/welcome_screen.dart';
 import 'services/auth_service.dart';
 import 'services/consent.dart';
+import 'services/crash_reporter.dart';
+import 'services/diagnostics_log.dart';
 import 'services/firebase_gateway.dart';
 import 'services/litert_service.dart';
 import 'services/memory_cache.dart';
@@ -26,6 +28,12 @@ const _setupDeferredKey = 'sanctuary_model_setup_deferred';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // First, before anything that can fail. This reads the *previous* run's
+  // breadcrumb trail — if that run was killed rather than closed, this is the
+  // only moment the evidence still exists, because the next line overwrites it.
+  await DiagnosticsLog.instance.init();
+
   final prefs = await SharedPreferences.getInstance();
   // Sunlit by default: the Organic system is authored as a light theme, and
   // Dusk is the derived one.
@@ -52,6 +60,13 @@ void main() async {
   } catch (e) {
     debugPrint('Accounts/metrics unavailable, continuing: $e');
   }
+
+  // After FirebaseGateway, which it needs, and outside the timeout above: a slow
+  // network must not skip installing the error handlers. Not awaited past its
+  // own setup — uploads happen on their own schedule and an offline device is
+  // never delayed by them.
+  await CrashReporter.instance.init();
+  await CrashReporter.instance.setUser(AuthService.instance.uid);
   UsageMetrics.instance.startSession();
 
   final accepted = await Consent.isAccepted();
@@ -165,8 +180,17 @@ class SanctuaryAppState extends State<SanctuaryApp> with WidgetsBindingObserver 
       unawaited(UsageMetrics.instance.endSessionAndFlush().catchError((Object e) {
         debugPrint('Usage flush on pause failed: $e');
       }));
+      // From here on, being killed is ordinary Android behaviour rather than a
+      // crash — a backgrounded app holding 2 GB is the first thing reclaimed,
+      // and reporting that as a fault would bury the real ones. Its *absence*
+      // is the signal: a run that never reached this point died while the user
+      // was looking at it.
+      unawaited(DiagnosticsLog.instance.markCleanExit());
     } else if (state == AppLifecycleState.resumed) {
       UsageMetrics.instance.startSession();
+      // Reopens the trail. Without this the clean-exit marker written on pause
+      // stays the last line, and a crash after the user returns reads as clean.
+      unawaited(CrashReporter.instance.stage('resumed'));
     }
   }
 

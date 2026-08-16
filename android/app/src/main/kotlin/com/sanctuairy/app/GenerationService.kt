@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 
 /**
  * Keeps the process alive while the companion is composing a reply.
@@ -47,6 +48,7 @@ import android.os.IBinder
 class GenerationService : Service() {
 
     companion object {
+        private const val TAG = "GenerationService"
         private const val CHANNEL_ID = "sanctuary_generating"
         private const val NOTIFICATION_ID = 42
 
@@ -83,20 +85,53 @@ class GenerationService : Service() {
                 .setOngoing(true)
                 .build()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
-            )
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        // **The type passed here must be one the manifest declares, or Android
+        // throws IllegalArgumentException and kills the process.** This had a
+        // third branch passing FOREGROUND_SERVICE_TYPE_DATA_SYNC on API 29-33,
+        // while the manifest declares `specialUse` alone:
+        //
+        //   foregroundServiceType 0x00000001 is not a subset of
+        //   foregroundServiceType attribute 0x40000000
+        //
+        // `specialUse` does not exist before API 34, so every device on Android
+        // 10 to 13 took that branch — and because this service starts on every
+        // message, the app died every time the user sent one.
+        //
+        // The fix is the two-argument call rather than declaring `dataSync` as
+        // well: before API 34 the type argument is optional and the platform
+        // does not enforce it, so there is nothing to gain by naming a category
+        // this work does not belong to — and `dataSync` would have to be
+        // declared to Play, and carries a six-hour daily ceiling on API 34+.
+        // Guarded, because **failing to start must never take the app with
+        // it.** This service is an optimisation: it protects a reply that is
+        // already being generated from a backgrounded process being reclaimed.
+        // If it cannot start, the correct outcome is that the app carries on
+        // without that protection and, in the worst case, answers the message
+        // on next launch via `_answerUnansweredMessage` — which is the same
+        // path a genuine kill takes anyway.
+        //
+        // Instead, an exception here propagated out of onStartCommand on the
+        // main thread and crashed the process on every message sent. A service
+        // whose entire purpose is to stop replies being lost was destroying the
+        // app that produces them. The platform has several ways to refuse a
+        // foreground service — a missing permission, a background start
+        // restriction, a manifest mismatch — and none of them are worth a crash.
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Could not start in the foreground; generation " +
+                "continues unprotected.", e)
+            releaseWakeLock()
+            stopSelf()
+            return START_NOT_STICKY
         }
 
         // NOT_STICKY: if the system kills us mid-reply there is nothing useful

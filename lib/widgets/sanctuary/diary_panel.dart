@@ -25,9 +25,7 @@ import '../organic/organic.dart';
 /// the user's only control over what a diary entry teaches the companion, and
 /// `MemoryStore.syncJournal` erases derived facts the moment it is revoked.
 class DiaryPanel extends StatefulWidget {
-  final ValueChanged<List<JournalEntry>> onAllowedEntriesChanged;
-
-  const DiaryPanel({super.key, required this.onAllowedEntriesChanged});
+  const DiaryPanel({super.key});
 
   @override
   State<DiaryPanel> createState() => _DiaryPanelState();
@@ -108,9 +106,6 @@ class _DiaryPanelState extends State<DiaryPanel> {
     final list = await _db.getEntries();
     if (!mounted) return;
     setState(() => _entries = list);
-    widget.onAllowedEntriesChanged(
-      list.where((e) => e.allowAiAccess).toList(),
-    );
   }
 
   Future<void> _toggleAiAccess(JournalEntry entry) async {
@@ -342,6 +337,24 @@ class _ComposeEntryDialogState extends State<_ComposeEntryDialog> {
     return OrganicDialog(
       title: 'New Entry',
       body: 'Written to this device only.',
+      actions: [
+        OrganicButton(
+          label: 'Cancel',
+          variant: OrganicButtonVariant.secondary,
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        OrganicButton(
+          label: 'Save Entry',
+          // Read here, while the controllers are certainly still alive.
+          onPressed: () => Navigator.of(context).pop(
+            _EntryDraft(
+              _title.text.trim(),
+              _content.text.trim(),
+              _share,
+            ),
+          ),
+        ),
+      ],
       children: [
         OrganicField(
           label: 'Title',
@@ -371,24 +384,6 @@ class _ComposeEntryDialogState extends State<_ComposeEntryDialog> {
               onTap: () => setState(() => _share = !_share),
             ),
           ],
-        ),
-      ],
-      actions: [
-        OrganicButton(
-          label: 'Cancel',
-          variant: OrganicButtonVariant.secondary,
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        OrganicButton(
-          label: 'Save Entry',
-          // Read here, while the controllers are certainly still alive.
-          onPressed: () => Navigator.of(context).pop(
-            _EntryDraft(
-              _title.text.trim(),
-              _content.text.trim(),
-              _share,
-            ),
-          ),
         ),
       ],
     );
