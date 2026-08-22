@@ -1,5 +1,19 @@
 # Re-exporting the model to cut memory
 
+> [!IMPORTANT]
+> **The app does not ship a self-exported model.** It ships Google's official
+> prebuilt `gemma-4-E2B-it.litertlm` from
+> [litert-community/gemma-4-E2B-it-litert-lm](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm),
+> unmodified and verified by hash
+> (`181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c`,
+> 2,588,147,712 bytes — identical to the LFS object id Hugging Face reports).
+>
+> This document is the procedure for the day a re-export is genuinely needed —
+> a smaller KV cache, bounded prefill, or a multimodal variant. It is **not** how
+> the current model was produced. An earlier self-export was measured
+> (1,543 MB peak RSS against Google's 1,733 MB) and dropped: the gap was small,
+> and a Google-signed artifact is one less thing to ask a user to trust.
+
 Goal: reduce the **Native Heap**, which is the anonymous allocation the kernel
 cannot reclaim — repacked weights, the KV cache, and prefill activation buffers.
 
@@ -12,7 +26,8 @@ cannot reclaim — repacked weights, the KV cache, and prefill activation buffer
 | Private Clean | Mostly the model `mmap` — file-backed and **evictable**, re-read from disk |
 | RSS | Includes the evictable part. Misleading on its own |
 
-Measured baseline, Nothing A059P (Android 16, 11.7 GB), current export:
+Measured baseline, Nothing A059P (Android 16, 11.7 GB), on the **shipped**
+(Google prebuilt) model:
 
 ```
 Native Heap    790 MB
@@ -22,19 +37,23 @@ RSS Total     1818 MB
 PSS Total     1761 MB
 ```
 
-For comparison, Google publishes **1,733 MB** peak CPU memory for their own
-prebuilt E2B on Android. **We are already within 2% of the reference build**, so
-expect modest gains here, not a halving. There is no smaller Gemma 4 — the
-family is E2B and E4B only.
+Google publishes **1,733 MB** peak CPU memory for this same file on Android, and
+the 1,761 MB PSS above is within 2% of it — as it should be, since it *is* their
+build. So a re-export competes against a reference that is already well tuned:
+expect modest gains, not a halving. There is no smaller Gemma 4 — the family is
+E2B and E4B only.
 
 ## What is actually worth changing
 
-Two defects in the current export, both recorded in the README:
+Two properties of the shipped build that a re-export could change. Neither is a
+defect *we* introduced — they are how Google's general-purpose build is
+configured, read off the runtime's own load log on device:
 
-1. **Unbounded prefill.** No `prefill_lengths` was passed, so the runtime reports
-   `prefill_chunk_size: -1` and sizes the prefill activation buffer for the whole
-   4096-token context. Google's own example passes explicit lengths.
-2. **Oversized KV cache.** `max_tokens: 4096`, fixed at conversion.
+1. **Unbounded prefill.** The runtime reports `prefill_chunk_size: -1`, so the
+   prefill activation buffer is sized for the whole 4096-token context. Google's
+   own export example passes explicit `prefill_lengths`.
+2. **KV cache fixed at 4096.** `max_tokens: 4096`, set at conversion and not
+   settable from Dart — which is why `ContextBudget` exists app-side.
 
 ### Measured: the KV cache is not worth re-exporting for
 
@@ -92,6 +111,11 @@ laptop with 16 GB.
 
 Gemma is a gated repository: accept the licence on Hugging Face first, then
 authenticate.
+
+**On an unattended runner** (Kaggle, Colab, CI) the interactive licence gate breaks
+`from_pretrained`. The workaround used previously was to mirror the accepted
+weights into a personal, un-gated HF repo and export from that instead — pass the
+mirror as `--model=` rather than `google/gemma-4-E2B-it`.
 
 ```bash
 pip install -U litert-torch huggingface_hub

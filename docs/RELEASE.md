@@ -70,6 +70,21 @@ The companion is a 2.41 GB `.litertlm`. It cannot ship inside the bundle, so the
 app downloads it on first run — see
 [`lib/services/model_download_service.dart`](../lib/services/model_download_service.dart).
 
+**Which file, exactly.** `gemma-4-E2B-it.litertlm` from
+[litert-community/gemma-4-E2B-it-litert-lm](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm)
+— Google's official prebuilt build, unmodified. If you ever re-host it, upload
+*that* file and nothing else; the hash pinned in `ModelCatalog` must keep matching
+or every install fails verification:
+
+```
+size    2,588,147,712
+sha256  181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c
+```
+
+Note that repo also publishes GPU, web, Intel, Qualcomm and Tensor G5 variants.
+The plain `gemma-4-E2B-it.litertlm` is the CPU build and the only one this app
+has been tested against.
+
 **Already configured**, pointing at Cloudflare R2. The rest of this section
 matters only if you move it.
 

@@ -41,7 +41,9 @@ Current test suite: **105 passing**, analyzer clean.
 | **P0.6** | Re-export without punctuation-prefixed stop tokens (`".<turn\|>\n"`) — **re-check after P0.8 first**, it may be a corpus artifact | M |
 
 Nothing downstream waits on these: the app runs against stock Gemma 4 E2B today (see
-[Dual-model support](#dual-model-support)).
+[Dual-model support](#dual-model-support)) — specifically Google's **official prebuilt**
+`.litertlm`, unmodified and hash-verified. No self-export ships; see
+[docs/MODEL_EXPORT.md](docs/MODEL_EXPORT.md).
 
 ## P1 — remaining foundations
 

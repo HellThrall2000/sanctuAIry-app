@@ -21,7 +21,7 @@
   <img src="https://img.shields.io/badge/Firebase-Auth_·_Firestore-FFCA28?style=flat-square&logo=firebase&logoColor=black" alt="Firebase">
   <img src="https://img.shields.io/badge/SQLite-FTS5_·_BM25-003B57?style=flat-square&logo=sqlite&logoColor=white" alt="SQLite">
   <img src="https://img.shields.io/badge/Cloudflare_R2-model_delivery-F38020?style=flat-square&logo=cloudflare&logoColor=white" alt="Cloudflare R2">
-  <img src="https://img.shields.io/badge/tests-214_passing-success?style=flat-square" alt="214 tests passing">
+  <img src="https://img.shields.io/badge/tests-248_passing-success?style=flat-square" alt="248 tests passing">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT License">
 </p>
 
@@ -39,9 +39,11 @@ has learned, every mood reading — lives in SQLite on your device and is never 
 
 That is not a policy. It is a property of the build: inference happens locally on
 **stock Gemma 4 E2B** via Google's LiteRT-LM runtime, and the only class that talks to a
-server, [`UsageMetrics`](lib/services/usage_metrics.dart), **has no method that accepts a
-string**. There is no parameter through which one of your sentences could reach it, by
-accident or otherwise.
+server, [`UsageMetrics`](lib/services/usage_metrics.dart), exposes **no method that takes
+your text**. Every recorder is zero-argument — `recordMessageSent()`,
+`recordJournalEntry()`, `recordSignIn()` — so there is no parameter through which one of
+your sentences could reach it, by accident or otherwise. The one private
+`_log(String name)` carries an analytics event name, called with three fixed literals.
 
 The app ships against the **stock Google model**, not a fine-tune. Voice comes from the
 system instruction and few-shot exemplars in [`Persona`](lib/services/persona.dart), which
@@ -148,6 +150,21 @@ two concurrent loads would double an already-marginal footprint.
 
 ## Model delivery
 
+**The shipped model is Google's official prebuilt build, unmodified.** It is
+`gemma-4-E2B-it.litertlm` from
+[litert-community/gemma-4-E2B-it-litert-lm](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm),
+re-hosted for delivery but byte-identical to Google's — verifiable by hash:
+
+```
+size    2,588,147,712 bytes
+sha256  181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c
+```
+
+That value is pinned in [`ModelCatalog`](lib/services/model_catalog.dart) and matches the
+LFS object id Hugging Face reports for Google's file. Nothing here is fine-tuned, quantised
+or re-exported; an earlier self-export was measured and dropped, see
+[Engineering notes](#engineering-notes).
+
 The model is **not** in this repository. It is ~2.41 GB, far past what an app bundle can
 carry, so a fresh install downloads it once on first run.
 
@@ -198,18 +215,28 @@ Four findings that cost real time and are worth not rediscovering.
 <details>
 <summary><strong>1. A one-word export flag caused 7 GB of RAM and an OOM kill</strong></summary>
 
-The model was exported with `quantization_recipe='weight_only_wi4_afp32'`, which stores
-INT4 on disk but computes in **FP32** — so at delegate-init XNNPACK dequantized every
-weight tensor, an **8× expansion**. A small file with an enormous runtime footprint.
+> [!NOTE]
+> **This is not the shipped model.** The app ships Google's official prebuilt
+> `.litertlm` — see [Model delivery](#model-delivery). This note records what happened
+> when the model was exported here first, and why that export was abandoned.
 
-| | Broken | Re-exported | Google's official E2B |
+The self-export used `quantization_recipe='weight_only_wi4_afp32'`, which stores INT4 on
+disk but computes in **FP32** — so at delegate-init XNNPACK dequantized every weight
+tensor, an **8× expansion**. A small file with an enormous runtime footprint.
+
+| | Broken export | Fixed export | **Google's official (shipped)** |
 | --- | --- | --- | --- |
-| Peak RSS | 6,000–7,400 MB | **1,543 MB** | 1,733 MB |
-| `DEQUANTIZE` ops | — | **0** | — |
-| Result | `reason=3 (LOW_MEMORY)` | coherent reply | — |
+| Peak RSS | 6,000–7,400 MB | 1,543 MB | **1,733 MB** |
+| `DEQUANTIZE` ops | — | 0 | — |
+| Result | `reason=3 (LOW_MEMORY)` | coherent reply | coherent reply |
 
 The fix was `dynamic_wi4_afp32` — same bit width, integer kernels instead of an FP32
 compute path. Load time also fell from 29–56 s to under a second with a warm cache.
+
+**Why Google's build ships instead.** 1,543 MB against 1,733 MB is a real gap but a small
+one, and a Google-signed artifact is one less thing to ask a user to trust. The export
+procedure is kept in [docs/MODEL_EXPORT.md](docs/MODEL_EXPORT.md) for the day a re-export
+is genuinely needed — a smaller KV cache, or a multimodal variant.
 
 </details>
 
@@ -281,7 +308,7 @@ Full policy: [docs/PRIVACY.md](docs/PRIVACY.md) · Rules: [firebase/firestore.ru
 
 ```bash
 flutter pub get
-flutter test                  # 214 tests
+flutter test                  # 248 tests
 flutter build apk --release
 adb install -r build/app/outputs/flutter-apk/app-release.apk
 ```
