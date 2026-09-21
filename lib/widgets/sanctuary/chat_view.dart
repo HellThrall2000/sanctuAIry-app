@@ -11,7 +11,14 @@ import '../../models/memory_fact.dart';
 import '../../models/sentiment.dart';
 import '../../services/background_generation.dart';
 import '../../services/chat_store.dart';
+import '../../models/wellness.dart';
 import '../../services/chunk_store.dart';
+import '../../services/daily_review.dart';
+import '../../services/day_key.dart';
+import '../../services/wellness_log.dart';
+import '../../services/plan_store.dart';
+import '../../services/tracker_commands.dart';
+import '../../services/tracker_feed.dart';
 import '../../services/context_budget.dart';
 import '../../services/crisis_guard.dart';
 import '../../services/event_store.dart';
@@ -202,12 +209,17 @@ class _ChatViewState extends State<ChatView> {
   void initState() {
     super.initState();
     _chatStore.cleared.addListener(_onCleared);
+    // Tracker edits happen in a sheet over this screen, so the conversation is
+    // still alive to hear about them.
+    TrackerFeed.instance.addListener(_onTrackerChanged);
     _restore();
   }
 
   @override
   void dispose() {
     _chatStore.cleared.removeListener(_onCleared);
+    TrackerFeed.instance.removeListener(_onTrackerChanged);
+    _trackerTimer?.cancel();
     _textController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -263,6 +275,7 @@ class _ChatViewState extends State<ChatView> {
 
     await _answerUnansweredMessage();
     await _deliverPendingNudge();
+    await _deliverPendingReview();
   }
 
   /// Answers the last message if the app closed before the reply arrived.
@@ -299,6 +312,74 @@ class _ChatViewState extends State<ChatView> {
   /// Runs on open regardless of whether they arrived via the notification, so
   /// the app and the notification shade never disagree about whether the
   /// companion reached out.
+  /// The goals tonight's check-in asked about, while its answer is awaited.
+  ///
+  /// Held only until the next user turn. If they answer something else
+  /// entirely, the parse simply finds nothing and it clears — a question that
+  /// keeps waiting for its answer would turn the next three days of
+  /// conversation into a form.
+  List<Goal> _awaitingReview = const [];
+
+  /// Which day [_awaitingReview]'s answer belongs to. See `ReviewPrompt.day`.
+  DateTime? _reviewDay;
+
+  /// Asks how the day went, once, in the evening.
+  ///
+  /// Delivered as app text rather than generated, like the nudge above it: the
+  /// question has to be the same every night, and a 15-30s generation to ask it
+  /// would be the wrong place to spend the only inference this device can do.
+  /// Coalesces a burst of tracker edits into one line.
+  ///
+  /// Someone reorganising their week touches several things in a few seconds,
+  /// and a message per tap would bury the conversation under receipts. The
+  /// timer restarts on every change, so the line is posted once they have
+  /// stopped fiddling rather than while they are still going.
+  static const _trackerSettle = Duration(milliseconds: 1200);
+  Timer? _trackerTimer;
+
+  void _onTrackerChanged() {
+    _trackerTimer?.cancel();
+    _trackerTimer = Timer(_trackerSettle, _postTrackerNote);
+  }
+
+  /// Posts what changed in the tracker, in the conversation.
+  ///
+  /// **Written, not generated**, for the reason [TrackerFeed] records: this has
+  /// to appear at the moment of the tap, and a 15–30 s generation to say
+  /// "noted" is the wrong place to spend the only inference this device can
+  /// do. The companion's own turn comes on the next message, where it can
+  /// already see the change — `MemoryCache.onPlanChanged` refreshed the block
+  /// carrying it before this ever ran, which is the other half of the feature:
+  /// the line is what the user sees, that refresh is what the model knows.
+  Future<void> _postTrackerNote() async {
+    if (!mounted) return;
+    final text = TrackerFeed.messageFor(TrackerFeed.instance.take());
+    if (text == null) return;
+
+    final message = _system(text);
+    await _chatStore.append(message);
+    if (!mounted) return;
+    setState(() => _messages.add(message));
+    _scrollToBottom();
+  }
+
+  Future<void> _deliverPendingReview() async {
+    final review = await DailyReview.instance.pending();
+    if (review == null || !mounted) return;
+
+    final message = _system(review.text);
+    await _chatStore.append(message);
+    await DailyReview.instance.markDelivered(review.day);
+    if (!mounted) return;
+    setState(() {
+      _messages.add(message);
+      _awaitingReview = review.asked;
+      // The day the question was about, not the day the answer arrives on.
+      _reviewDay = review.day;
+    });
+    _scrollToBottom();
+  }
+
   Future<void> _deliverPendingNudge() async {
     await _nudges.load();
     final nudge = await _nudges.pendingNudge();
@@ -547,11 +628,18 @@ class _ChatViewState extends State<ChatView> {
       return;
     }
 
+    // Anything they asked the tracker to do, done before the reply is written
+    // so the companion can acknowledge a change that has already happened
+    // rather than promising to make one.
+    final trackerChanges = await _applyTrackerCommands(prompt);
+
     // Learn from what the user just said. Deterministic and instant, so it
     // costs nothing on the turn — see FactExtractor for why this is not a model
     // pass. Not awaited into the reply path: a failed write must never block a
     // conversation.
-    unawaited(_memory.learnFromMessage(prompt).catchError((Object e) {
+    unawaited(_memory
+        .learnFromMessage(prompt, sourceId: userMessage.id)
+        .catchError((Object e) {
       debugPrint('Memory write failed: $e');
       return <MemoryFact>[];
     }));
@@ -662,6 +750,38 @@ class _ChatViewState extends State<ChatView> {
     // celebrate a job offer the user had just said they did not get.
     final cue = Persona.moodCue(mood);
 
+    // The evening check-in's answer, read and written down before the reply is
+    // generated — so the companion can confirm what was recorded rather than
+    // promising to remember it.
+    final trackerCue = Persona.trackerCue(trackerChanges);
+    String? reviewCue;
+    if (_awaitingReview.isNotEmpty) {
+      final asked = _awaitingReview;
+      final day = _reviewDay;
+      _awaitingReview = const [];
+      _reviewDay = null;
+      final values = GoalReplyParser.parse(prompt, asked);
+      if (values.isNotEmpty) {
+        await DailyReview.instance.apply(values, when: day);
+        await _cache.onPlanChanged();
+
+        final byMetric = {for (final v in values) v.metric: v.value};
+        final recorded = <String>[];
+        final missed = <String>[];
+        for (final goal in asked) {
+          final value = byMetric[goal.metric];
+          if (value == null) continue;
+          recorded.add('${Metric.label(goal.metric)} '
+              '${Metric.render(goal.metric, value)}');
+          if (!goal.isMetBy(value)) missed.add(Metric.label(goal.metric));
+        }
+        reviewCue = Persona.reviewCue(recorded: recorded, missed: missed);
+      }
+    }
+
+    // A goal set since the last turn. Consumed once — see WellnessLog.
+    final goalCue = Persona.newGoalCue(WellnessLog.instance.takeNewGoal() ?? '');
+
     // Diary entries shared *after* this conversation was created. The system
     // instruction is fixed once the model starts, so an entry permitted
     // mid-session has no other way in — which is precisely why the companion
@@ -674,6 +794,9 @@ class _ChatViewState extends State<ChatView> {
     }
 
     final fullPrompt = [
+      if (trackerCue != null) trackerCue,
+      if (goalCue != null) goalCue,
+      if (reviewCue != null) reviewCue,
       if (freshNotes != null) freshNotes,
       if (episodic != null) episodic,
       if (recall != null) recall,
@@ -806,7 +929,11 @@ class _ChatViewState extends State<ChatView> {
     // push the check-in timer out. Neither belongs in the reply path.
     unawaited(() async {
       try {
-        await _chunks.addExchange(userText: prompt, replyText: reply);
+        await _chunks.addExchange(
+          userText: prompt,
+          replyText: reply,
+          messageId: userMessage.id,
+        );
         // Anything learned this turn becomes visible to the *next* conversation
         // without another database read on the send path.
         await _cache.refreshProfile();
@@ -1314,6 +1441,166 @@ class _ChatViewState extends State<ChatView> {
     }
   }
 
+  /// Carries out anything [prompt] asked the tracker to do.
+  ///
+  /// Returns the confirmations, for [Persona.trackerCue]. Empty for almost
+  /// every message — see [TrackerCommandParser] for why this is deliberately
+  /// hard to trigger.
+  ///
+  /// **Applied before the reply is generated**, so the companion is
+  /// acknowledging something that has already happened. Doing it afterwards
+  /// would mean a reply that says "added it" and then a write that fails, and
+  /// the user has no way to tell those apart.
+  Future<List<String>> _applyTrackerCommands(String prompt) async {
+    // The goals the user actually has. Without them the parser cannot tell an
+    // edit from a new goal, and "change meditation to 15 minutes" either did
+    // nothing or created a second meditation with the schedule wiped off it.
+    final existing = await WellnessLog.instance.activeGoals();
+    final commands = TrackerCommandParser.parse(prompt, existing: existing);
+    if (commands.isEmpty) return const [];
+
+    final done = <String>[];
+    for (final command in commands) {
+      try {
+        switch (command.action) {
+          // Both write the whole goal: the parser resolved an edit against the
+          // stored one and applied only what was named, so there is nothing
+          // left here to merge.
+          case TrackerAction.addHabit:
+          case TrackerAction.editHabit:
+            await WellnessLog.instance.setGoal(command.goal!);
+
+          case TrackerAction.dropHabit:
+            final match =
+                await WellnessLog.instance.goalFor(command.goal!.metric);
+            if (match == null) continue;
+            // Archived, not deleted — a past goal must not be able to rewrite
+            // the history that was scored against it. See [Goal.archivedAt].
+            await WellnessLog.instance.archiveGoal(match.id);
+
+          case TrackerAction.addTask:
+            await PlanStore.instance
+                .addTodo(command.taskText!, priority: command.priority);
+
+          case TrackerAction.completeTask:
+            final open = await PlanStore.instance.openTodos();
+            final needle = command.taskText!.toLowerCase();
+            final match = open
+                .where((t) => t.text.toLowerCase().contains(needle))
+                .firstOrNull;
+            if (match == null) continue;
+            await PlanStore.instance.updateTodo(match.toggled());
+        }
+        done.add(command.confirmation);
+      } catch (e) {
+        // A failed write must never take the conversation down with it. The
+        // confirmation is only added on success, so the companion cannot claim
+        // to have done something that did not happen.
+        debugPrint('Tracker command failed: $e');
+      }
+    }
+
+    if (done.isNotEmpty) {
+      // The tracker block is fixed for the life of a conversation, so a change
+      // made mid-chat rides the next turn — the same mechanism a logged goal
+      // uses. Without this the companion would confirm a habit it cannot see.
+      await _cache.onPlanChanged();
+    }
+    return done;
+  }
+
+  /// Asks before removing a message, then removes it.
+  ///
+  /// Confirmed rather than undoable: an undo would have to keep the text and
+  /// everything derived from it alive somewhere for the length of a snackbar,
+  /// which is exactly the thing the user just asked to be rid of.
+  Future<void> _confirmDelete(ChatMessage msg) async {
+    final confirmed = await OrganicDialog.show<bool>(
+      context,
+      OrganicDialog(
+        title: 'Delete this message?',
+        // Says what actually happens, including the part that does not. The
+        // diary panel learned this lesson first: copy that implies a complete
+        // erase when the erase is partial is worse than copy that admits it.
+        body: msg.isUser
+            ? 'It goes from this conversation, and what the companion learned '
+                'from it is removed too. A summary of an older session may '
+                'still carry the gist - "Forget everything" in What I Remember '
+                'is the complete erase.'
+            : 'It goes from this conversation. Nothing the companion knows '
+                'came from its own replies, so nothing else changes.',
+        actions: [
+          OrganicButton(
+            label: 'Cancel',
+            variant: OrganicButtonVariant.secondary,
+            onPressed: () => Navigator.of(context).pop(false),
+          ),
+          OrganicButton(
+            label: 'Delete',
+            foreground: context.tokens.danger,
+            variant: OrganicButtonVariant.secondary,
+            onPressed: () => Navigator.of(context).pop(true),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await _deleteMessage(msg);
+  }
+
+  /// Removes [msg] from the screen, the database, and the companion's memory.
+  ///
+  /// **The three have to move together.** Deleting only the row leaves the
+  /// sentence in the retrieval index, so the companion keeps quoting something
+  /// the user watched disappear - an erase that looks like it worked is worse
+  /// than none at all.
+  Future<void> _deleteMessage(ChatMessage msg) async {
+    await _chatStore.deleteMessage(msg.id);
+
+    // Only the user's own turns taught it anything: `addExchange` indexes
+    // "They said: ..." and nothing else, so a companion turn has no derived
+    // memory to unwind.
+    if (msg.isUser) {
+      await _cache.onChatDeleted(messageId: msg.id, text: msg.text);
+    }
+    if (!mounted) return;
+
+    setState(() {
+      _messages.removeWhere((m) => m.id == msg.id);
+      if (_awaitingReview.isNotEmpty && msg.role == ChatRole.system) {
+        // The question is gone, so nothing is waiting on an answer to it.
+        _awaitingReview = const [];
+        _reviewDay = null;
+      }
+      // Rebuilt, not spliced. The transcript pairs each user turn with the
+      // reply to it *by position* - see [_remember] - so removing one entry
+      // by hand would shift every later pair onto the wrong partner.
+      _modelTranscript
+        ..clear()
+        ..addAll(_transcriptFrom(_messages));
+    });
+
+    // The engine holds its own copy of the conversation, so until it is
+    // reseeded the deleted line is still in the live context and can still be
+    // referred to. Skipped mid-generation, where swapping the context out from
+    // under a running decode is the more visible failure; the next reseed or
+    // cold start picks it up.
+    if (msg.sentToModel && _liteRtService.isInitialized && !_isGenerating) {
+      unawaited(
+        _liteRtService
+            .reseed(
+              history: List<LiteLmMessage>.of(_modelTranscript),
+              // Normal sampling: this is not the repetition escape hatch that
+              // `reseed` defaults to, it is a correction to the record.
+              temperatureMultiplier: 1.0,
+            )
+            .then((err) {
+          if (err != null) debugPrint('Reseed after delete failed: $err');
+        }),
+      );
+    }
+  }
+
   /// Opens the sampler tuning panel (debug builds only — see
   /// [DevSettingsSheet]). Reachable by long-pressing the composer, which keeps
   /// it out of the way of normal use.
@@ -1362,7 +1649,24 @@ class _ChatViewState extends State<ChatView> {
               controller: _scrollController,
               padding: s.listPadding,
               itemCount: _messages.length,
-              itemBuilder: (context, index) => _bubble(_messages[index]),
+              itemBuilder: (context, index) {
+                final msg = _messages[index];
+                final previous = index == 0 ? null : _messages[index - 1];
+                // Compared as local day keys, not by subtracting timestamps:
+                // "a different day" is a calendar question, and DayKey is
+                // already the one place in the app that answers it.
+                final turned = previous == null ||
+                    DayKey.of(previous.createdAt.toLocal()) !=
+                        DayKey.of(msg.createdAt.toLocal());
+                if (!turned) return _bubble(msg);
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _DaySeparator(day: msg.createdAt.toLocal()),
+                    _bubble(msg),
+                  ],
+                );
+              },
             ),
           ),
         ),
@@ -1444,7 +1748,13 @@ class _ChatViewState extends State<ChatView> {
                     s.listPadding.horizontal) *
                 s.bubbleMaxWidthFactor,
           ),
-          child: Container(
+          child: GestureDetector(
+            // Long-press rather than a visible button on every bubble: the
+            // transcript is the thing being read, and a delete affordance on
+            // each line would compete with it. This is also where people
+            // already reach for it in a messaging app.
+            onLongPress: () => _confirmDelete(msg),
+            child: Container(
             padding: s.bubblePadding,
             decoration: BoxDecoration(
               color: isUser ? t.userBubbleBg : t.assistantBubbleBg,
@@ -1472,17 +1782,55 @@ class _ChatViewState extends State<ChatView> {
                     isUser ? t.userBubbleFg : t.assistantBubbleFg,
                     size: s.bubbleFontSize,
                   ),
-                ),
-                if (isUser) ...[
-                  const SizedBox(height: 3),
-                  _DeliveryTicks(
-                    delivery: msg.delivery,
-                    pending: t.userBubbleFg.withValues(alpha: 0.55),
-                    size: s.bubbleFontSize,
+                  // **Delete lives in the selection menu, not on a long-press
+                  // of its own.** A `GestureDetector` wrapping this never sees
+                  // the long press: SelectableText claims it for text
+                  // selection, so the handler below the bubble silently never
+                  // fired. Rather than take selection away — copying a line
+                  // out of a conversation is worth keeping — the action is
+                  // appended to the menu the long press already opens.
+                  contextMenuBuilder: (context, state) =>
+                      AdaptiveTextSelectionToolbar.buttonItems(
+                    anchors: state.contextMenuAnchors,
+                    buttonItems: [
+                      ...state.contextMenuButtonItems,
+                      ContextMenuButtonItem(
+                        label: 'Delete',
+                        onPressed: () {
+                          // Dismiss the toolbar first: it is an overlay, and
+                          // leaving it up behind a modal dialog strands it
+                          // there after the dialog closes.
+                          ContextMenuController.removeAny();
+                          state.hideToolbar();
+                          _confirmDelete(msg);
+                        },
+                      ),
+                    ],
                   ),
-                ],
+                ),
+                const SizedBox(height: 3),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _TimeLabel(
+                      at: msg.createdAt,
+                      color: (isUser ? t.userBubbleFg : t.assistantBubbleFg)
+                          .withValues(alpha: 0.7),
+                      size: s.bubbleFontSize,
+                    ),
+                    if (isUser) ...[
+                      const SizedBox(width: 5),
+                      _DeliveryTicks(
+                        delivery: msg.delivery,
+                        pending: t.tickPending,
+                        size: s.bubbleFontSize,
+                      ),
+                    ],
+                  ],
+                ),
               ],
             ),
+          ),
           ),
         ),
       ),
@@ -1705,7 +2053,7 @@ class _DeliveryTicks extends StatelessWidget {
         // a recoloured icon as the same widget.
         key: ValueKey(delivery),
         size: size,
-        color: read ? Organic.tickRead : pending,
+        color: read ? context.tokens.tickRead : pending,
       ),
     );
   }
@@ -1754,6 +2102,82 @@ class _TypingDotsState extends State<_TypingDots>
             ),
           );
         }),
+      ),
+    );
+  }
+}
+
+/// The clock time a message was sent, in the corner of its bubble.
+///
+/// 12- or 24-hour according to the device, read from [MediaQuery] rather than
+/// guessed: this app ships no `intl` dependency, and hard-coding either format
+/// is wrong for half the world.
+class _TimeLabel extends StatelessWidget {
+  final DateTime at;
+  final Color color;
+  final double size;
+
+  const _TimeLabel({required this.at, required this.color, required this.size});
+
+  @override
+  Widget build(BuildContext context) {
+    final local = at.toLocal();
+    final use24 = MediaQuery.of(context).alwaysUse24HourFormat;
+
+    final String text;
+    if (use24) {
+      text = '${local.hour.toString().padLeft(2, '0')}:'
+          '${local.minute.toString().padLeft(2, '0')}';
+    } else {
+      final hour = local.hour % 12 == 0 ? 12 : local.hour % 12;
+      final suffix = local.hour < 12 ? 'am' : 'pm';
+      text = '$hour:${local.minute.toString().padLeft(2, '0')} $suffix';
+    }
+
+    return Text(
+      text,
+      style: OrganicText.bubble(color, size: size).copyWith(
+        // Small and quiet: a timestamp on every line is reference material, and
+        // at bubble size it would compete with the message itself.
+        fontSize: size - 3.5,
+        height: 1.0,
+        fontFeatures: const [FontFeature.tabularFigures()],
+      ),
+    );
+  }
+}
+
+/// "Today", "Yesterday", or a date - drawn between two days of conversation.
+///
+/// Relative for the two days people think of by name and absolute after that,
+/// which is the point at which "3 days ago" starts costing more to decode than
+/// a date does.
+class _DaySeparator extends StatelessWidget {
+  final DateTime day;
+
+  const _DaySeparator({required this.day});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: Organic.space3,
+            vertical: Organic.space1,
+          ),
+          decoration: BoxDecoration(
+            color: t.bgSurface,
+            borderRadius: BorderRadius.circular(Organic.radiusPill),
+            border: Border.all(color: t.border),
+          ),
+          child: Text(
+            DayLabel.of(day),
+            style: OrganicText.cardMeta(t).copyWith(fontSize: 11),
+          ),
+        ),
       ),
     );
   }

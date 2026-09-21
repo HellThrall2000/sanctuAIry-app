@@ -48,17 +48,29 @@ class OrganicTag extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = context.tokens;
 
+    // **Tags are the one widget that reads the raw ramps rather than the
+    // theme.** That was harmless while Dusk was Sunlit dimmed and both palettes
+    // shared a hue; with Dusk now neon on near-black, a pale terracotta fill
+    // floats on the ground like a sticker. So the two filled variants branch on
+    // the theme: a soft tint in Sunlit, a tinted chip with a lit edge in Dusk,
+    // which is how a lit colour behaves on a dark surface.
     final (Color bg, Color fg, Color? borderColor) = switch (variant) {
-      OrganicTagVariant.accent => (
-          Organic.accent100,
-          Organic.accent800,
-          null,
-        ),
-      OrganicTagVariant.accent2 => (
-          Organic.accent2100,
-          Organic.accent2800,
-          null,
-        ),
+      OrganicTagVariant.accent => t.isDark
+          ? (
+              Organic.duskAccent.withValues(alpha: 0.18),
+              Organic.duskAccentSoft,
+              Organic.duskAccent.withValues(alpha: 0.55),
+            )
+          : (Organic.accent100, Organic.accent800, null),
+      // Yellow rather than a second blue: the two filled variants exist to be
+      // told apart, and two neighbouring blues at 18% alpha are not.
+      OrganicTagVariant.accent2 => t.isDark
+          ? (
+              Organic.duskVoice.withValues(alpha: 0.18),
+              Organic.duskVoice,
+              Organic.duskVoice.withValues(alpha: 0.55),
+            )
+          : (Organic.accent2100, Organic.accent2800, null),
       // The one place the transcription departs from the stylesheet, and only
       // under Sunlit. `.tag-neutral` fills with `--color-neutral-100`
       // (#F9F4ED), which the ramps put close to the *base* Organic background
@@ -68,11 +80,9 @@ class OrganicTag extends StatelessWidget {
       // where "Rain / Resonance / Temple Bells" rendered as bare text with no
       // hint they were tappable. A hairline restores the affordance without
       // touching the specified fill. Dusk is unaffected and takes no border.
-      OrganicTagVariant.neutral => (
-          Organic.neutral100,
-          Organic.neutral800,
-          t.isDark ? null : Organic.neutral300,
-        ),
+      OrganicTagVariant.neutral => t.isDark
+          ? (t.bgSurface, t.muted, t.border)
+          : (Organic.neutral100, Organic.neutral800, Organic.neutral300),
       // The prototype overrides the stylesheet's `border-color: accent` with
       // the theme's own border, and the label with `accentText`.
       OrganicTagVariant.outline => (Colors.transparent, t.accentText, t.border),

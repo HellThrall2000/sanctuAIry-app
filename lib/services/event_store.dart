@@ -38,6 +38,21 @@ class EventStore {
     return events;
   }
 
+  /// Drops events extracted from one message.
+  ///
+  /// Matched on `evidence`, which stores the source text verbatim — see
+  /// `EventExtractor`. That avoids a schema migration for a column that would
+  /// hold the same information, and it reaches rows written before deletion
+  /// existed, which a new column could not.
+  Future<int> forgetFrom(String text) async {
+    final db = await _database;
+    return db.delete(
+      'upcoming_events',
+      where: 'evidence = ?',
+      whereArgs: [text.trim()],
+    );
+  }
+
   /// The event most worth asking about, or null.
   ///
   /// Prefers the most recently passed one: if two things happened, the fresher

@@ -8,6 +8,7 @@ import '../widgets/organic/organic.dart';
 import '../widgets/sanctuary/chat_view.dart';
 import '../widgets/sanctuary/diary_panel.dart';
 import '../widgets/sanctuary/settings_panel.dart';
+import '../widgets/sanctuary/wellness_panel.dart';
 
 /// Variation **1c — Focus Bloom**, the phone shell.
 ///
@@ -31,7 +32,7 @@ class FocusBloomShell extends StatefulWidget {
   State<FocusBloomShell> createState() => _FocusBloomShellState();
 }
 
-enum _Sheet { diary, settings }
+enum _Sheet { wellness, diary, settings }
 
 class _FocusBloomShellState extends State<FocusBloomShell> {
   _Sheet? _activeSheet;
@@ -87,6 +88,12 @@ class _FocusBloomShellState extends State<FocusBloomShell> {
                 child: _tabBar(t),
               ),
               _backdrop(),
+              _sheet(
+                open: _activeSheet == _Sheet.wellness,
+                height: sheetHeight,
+                title: 'TrAIcker',
+                child: const WellnessPanel(),
+              ),
               _sheet(
                 open: _activeSheet == _Sheet.diary,
                 height: sheetHeight,
@@ -154,7 +161,9 @@ class _FocusBloomShellState extends State<FocusBloomShell> {
                 label,
                 style: OrganicText.navLabel(
                   active ? t.accentText : t.muted,
-                  size: 12,
+                  // 11, not 12: a fourth tab pushed four Expanded children into
+                  // a 58px pill and "Companion" began to clip on a narrow phone.
+                  size: 11,
                 ),
               ),
             ),
@@ -178,6 +187,11 @@ class _FocusBloomShellState extends State<FocusBloomShell> {
         child: Row(
           children: [
             tab('Companion', _activeSheet == null, _closeSheet),
+            tab(
+              'TrAIcker',
+              _activeSheet == _Sheet.wellness,
+              () => setState(() => _activeSheet = _Sheet.wellness),
+            ),
             tab(
               'Diary',
               _activeSheet == _Sheet.diary,

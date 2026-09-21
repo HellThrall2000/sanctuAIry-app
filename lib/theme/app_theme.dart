@@ -33,7 +33,7 @@ abstract final class AppTheme {
       onPrimary: t.onAccent,
       secondary: t.accentText,
       onSecondary: t.onAccent,
-      error: Organic.danger,
+      error: t.danger,
       onError: Organic.neutral100,
       surface: t.bgSurface,
       onSurface: t.text,

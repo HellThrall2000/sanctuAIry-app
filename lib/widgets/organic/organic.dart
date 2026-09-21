@@ -11,4 +11,5 @@ export 'organic_card.dart';
 export 'organic_controls.dart';
 export 'organic_dialog.dart';
 export 'organic_input.dart';
+export 'organic_progress.dart';
 export 'organic_tag.dart';

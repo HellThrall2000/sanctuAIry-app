@@ -374,7 +374,7 @@ class _Notice extends StatelessWidget {
     final accent = switch (tone) {
       _NoticeTone.info => t.accentText,
       _NoticeTone.warning => Organic.accent600,
-      _NoticeTone.error => Organic.danger,
+      _NoticeTone.error => t.danger,
     };
 
     return Container(
