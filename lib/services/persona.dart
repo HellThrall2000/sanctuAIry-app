@@ -194,6 +194,79 @@ class Persona {
   /// user. This stays under that length, states what is true rather than what
   /// to do, and only appears when [MoodReading.isSignal] — so most turns still
   /// carry nothing.
+  /// What to say when the user has just answered the evening check-in.
+  ///
+  /// **A per-turn cue, not persona text.** Every instinct says to put "notice
+  /// when they are falling short and help" into the system instruction, and
+  /// this file records what happens when you do: a ceiling phrased as a
+  /// permitted action becomes a quota, and the model performed it on *every*
+  /// turn. "Ask at most one question" produced an interrogation every reply.
+  /// Coaching in the system instruction would produce a progress report every
+  /// reply. So it rides one turn — the one where it is actually true.
+  ///
+  /// [recorded] is what was just written down, so the companion can confirm it
+  /// without the user having to check. [missed] is what fell short, phrased as
+  /// a conditional rather than an instruction: on a small model "suggest an
+  /// improvement" is an order it will follow even when there is nothing useful
+  /// to say, and advice nobody needed is how a companion becomes tiring.
+  static String? reviewCue({
+    required List<String> recorded,
+    required List<String> missed,
+  }) {
+    if (recorded.isEmpty && missed.isEmpty) return null;
+
+    final parts = <String>[];
+    if (recorded.isNotEmpty) {
+      parts.add('You have written down ${_list(recorded)}');
+    }
+    if (missed.isNotEmpty) {
+      parts.add('${_list(missed)} fell short today. If one small, practical '
+          'thing would help tomorrow, say it once — otherwise just take it in. '
+          'Do not lecture, and do not read their numbers back to them');
+    }
+    return '(${parts.join('. ')}.)';
+  }
+
+  /// What to say when a goal has just been set.
+  ///
+  /// Setting a goal is the most optimistic thing anyone does in this app and it
+  /// currently happens in silence. This is the one place enthusiasm is
+  /// unambiguously right, so it is stated plainly rather than left to the
+  /// model's judgement — and, again, for exactly one turn.
+  static String? newGoalCue(String goalLabel) {
+    if (goalLabel.trim().isEmpty) return null;
+    return '(They have just set themselves a new goal: $goalLabel. '
+        'Say something about it before anything else — this is worth being '
+        'pleased about.)';
+  }
+
+  /// The companion has just changed the tracker on the user's instruction.
+  ///
+  /// Per-turn, like every other cue here, for the reason this file keeps
+  /// relearning: anything permanent in the system instruction becomes a quota,
+  /// and a standing note about the tracker would have it narrating the habit
+  /// list every single turn.
+  ///
+  /// The *confirmation itself is written, not generated* — [changes] are the
+  /// parser's own words. The model is told to acknowledge them, not to restate
+  /// them, because a 2B model asked to repeat a number back will eventually
+  /// repeat a different one, and a tracker that mis-reports what it stored is
+  /// worse than one that says nothing at all.
+  static String? trackerCue(List<String> changes) {
+    if (changes.isEmpty) return null;
+    return '(You have just done this for them: ${_list(changes)}. '
+        'Acknowledge it briefly and naturally in your reply — do not repeat '
+        'the numbers back, and do not list anything else they are tracking.)';
+  }
+
+  static String _list(List<String> items) => switch (items.length) {
+        0 => '',
+        1 => items.first,
+        2 => '${items[0]} and ${items[1]}',
+        _ => '${items.sublist(0, items.length - 1).join(', ')} '
+            'and ${items.last}',
+      };
+
   static String? moodCue(MoodReading mood) {
     if (!mood.isSignal) return null;
     if (mood.label.isNegative) {

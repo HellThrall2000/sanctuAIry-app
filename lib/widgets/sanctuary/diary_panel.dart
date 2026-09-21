@@ -196,7 +196,7 @@ class _DiaryPanelState extends State<DiaryPanel> {
           Text(
             _error,
             textAlign: TextAlign.center,
-            style: OrganicText.cardMeta(t).copyWith(color: Organic.danger),
+            style: OrganicText.cardMeta(t).copyWith(color: t.danger),
           ),
         OrganicButton(
           label: _hasPasscode ? 'Unlock Diary' : 'Create Passcode',

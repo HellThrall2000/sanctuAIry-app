@@ -32,6 +32,11 @@ class OrganicInput extends StatefulWidget {
   final TextInputAction? textInputAction;
   final TextCapitalization textCapitalization;
 
+  /// Added for the tracker, which logs hours, litres and minutes. Without it a
+  /// numeric field opens the full QWERTY keyboard and invites "six and a half"
+  /// into a REAL column.
+  final TextInputType? keyboardType;
+
   /// Defaults to the theme's surface. Overridden where a field sits *inside* a
   /// surface-coloured card — the diary passcode uses `bgApp` so it recedes.
   final Color? fillColor;
@@ -50,6 +55,7 @@ class OrganicInput extends StatefulWidget {
     this.focusNode,
     this.textInputAction,
     this.textCapitalization = TextCapitalization.sentences,
+    this.keyboardType,
     this.fillColor,
   });
 
@@ -100,6 +106,7 @@ class _OrganicInputState extends State<OrganicInput> {
             minLines: widget.minLines,
             textInputAction: widget.textInputAction,
             textCapitalization: widget.textCapitalization,
+            keyboardType: widget.keyboardType,
             onSubmitted: widget.onSubmitted,
             onChanged: widget.onChanged,
             cursorColor: t.accentBg,

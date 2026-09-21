@@ -78,14 +78,56 @@ class ChunkStore {
   Future<void> addExchange({
     required String userText,
     required String replyText,
+    String? messageId,
   }) async {
-    final text = 'They said: ${userText.trim()}';
+    final text = chatChunkText(userText);
     if (text.length < minChunkLength) return;
     await _insert(
       text: text,
       source: ChunkSource.chat,
-      sourceId: null,
+      // **The message this came from.** It used to be null, which made a chat
+      // chunk untraceable: deleting the message left the sentence in the
+      // retrieval index, so the companion went on quoting something the user
+      // had erased. Storing the id is what makes [forgetChatMessage] exact.
+      sourceId: messageId,
     );
+  }
+
+  /// Exactly what [addExchange] stores for [userText].
+  ///
+  /// Public because deletion has to reproduce it byte for byte to find rows
+  /// written before `sourceId` was recorded — see [forgetChatMessage].
+  static String chatChunkText(String userText) =>
+      'They said: ${userText.trim()}';
+
+  /// Drops what a single chat message contributed to retrieval.
+  ///
+  /// Two passes, because the index holds two generations of row. Anything
+  /// written since [addExchange] started recording ids is removed by id.
+  /// Anything older carries `sourceId IS NULL` and can only be matched on its
+  /// text — which is safe precisely because that text is generated, not typed:
+  /// it is `chatChunkText` of a message that is being deleted anyway.
+  ///
+  /// Returns how many were removed, for the log.
+  Future<int> forgetChatMessage({
+    required String userText,
+    String? messageId,
+  }) async {
+    final db = await _database;
+    var removed = 0;
+    if (messageId != null) {
+      removed += await db.delete(
+        'memory_chunk',
+        where: 'sourceId = ?',
+        whereArgs: [messageId],
+      );
+    }
+    removed += await db.delete(
+      'memory_chunk',
+      where: 'source = ? AND sourceId IS NULL AND text = ?',
+      whereArgs: [ChunkSource.chat.name, chatChunkText(userText)],
+    );
+    return removed;
   }
 
   /// Removes chunks that recorded the companion's own replies.

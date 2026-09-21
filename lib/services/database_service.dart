@@ -33,7 +33,7 @@ class DatabaseService {
 
     final db = await openDatabase(
       path,
-      version: 4,
+      version: 8,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -121,6 +121,8 @@ class DatabaseService {
     ''');
     await _createMemoryTable(db);
     await _createCompanionTables(db);
+    await _createTrackerTables(db);
+    await _createPlanTables(db);
   }
 
   /// Migrations are strictly additive.
@@ -128,6 +130,11 @@ class DatabaseService {
   /// v1 -> v2 adds the memory cache. v2 -> v3 adds the conversation log,
   /// episodic chunks, the relationship log and upcoming events. v3 -> v4 adds
   /// `chat_messages.replyToId`, so a reply can name the message it answers.
+  /// v4 -> v5 adds the wellness tracker: goals and one row per metric per day.
+  /// v5 -> v6 adds the plan: a to-do list and a weekly routine. v6 -> v7 gives
+  /// a goal a unit and a set of weekdays, so a habit can be "meditate 30
+  /// minutes on weekdays" rather than a daily tick. v7 -> v8 lets a goal carry
+  /// an emoji the user picked.
   /// Existing journals and facts are untouched: this is a user's private diary
   /// and a migration that drops it is unrecoverable.
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -139,6 +146,62 @@ class DatabaseService {
     }
     if (oldVersion < 4) {
       await _addReplyToColumn(db);
+    }
+    if (oldVersion < 5) {
+      await _createTrackerTables(db);
+    }
+    if (oldVersion < 6) {
+      await _createPlanTables(db);
+    }
+    if (oldVersion < 7) {
+      await _addGoalShapeColumns(db);
+    }
+    if (oldVersion < 8) {
+      await _addGoalEmojiColumn(db);
+    }
+  }
+
+  /// Adds `goals.emoji` to a database created before v8.
+  ///
+  /// Same guarded shape as the two migrations above, for the same reason:
+  /// `ALTER TABLE` has no `IF NOT EXISTS`, and a throwing migration takes the
+  /// whole upgrade down with it. A goal with no emoji reads as null, which the
+  /// card renders without one.
+  static Future<void> _addGoalEmojiColumn(Database db) async {
+    try {
+      final columns = await db.rawQuery('PRAGMA table_info(goals)');
+      final present = {for (final c in columns) c['name'] as String};
+      if (present.contains('emoji')) return;
+      await db.execute('ALTER TABLE goals ADD COLUMN emoji TEXT');
+    } catch (e) {
+      debugPrint('Could not add goal emoji; cards go without: $e');
+    }
+  }
+
+  /// Adds `goals.unit` and `goals.weekdays` to a database created before v7.
+  ///
+  /// Same shape as [_addReplyToColumn], and for the same reason: `ALTER TABLE`
+  /// has no `IF NOT EXISTS`, so the column is checked for first and the whole
+  /// thing is swallowed on failure. A migration that throws takes the entire
+  /// `onUpgrade` transaction with it and leaves the app unable to open its own
+  /// database — losing a habit's unit is cosmetic, losing the diary is not.
+  ///
+  /// Both columns are nullable with no default on purpose. `Goal.fromMap`
+  /// reads a null unit as the metric's default, which for a habit is "times" —
+  /// exactly the tick it was before the column existed — so every existing row
+  /// keeps meaning what it meant.
+  static Future<void> _addGoalShapeColumns(Database db) async {
+    try {
+      final columns = await db.rawQuery('PRAGMA table_info(goals)');
+      final present = {for (final c in columns) c['name'] as String};
+      if (!present.contains('unit')) {
+        await db.execute('ALTER TABLE goals ADD COLUMN unit TEXT');
+      }
+      if (!present.contains('weekdays')) {
+        await db.execute('ALTER TABLE goals ADD COLUMN weekdays TEXT');
+      }
+    } catch (e) {
+      debugPrint('Could not widen goals; habits stay daily ticks: $e');
     }
   }
 
@@ -158,6 +221,121 @@ class DatabaseService {
     } catch (e) {
       debugPrint('Could not add replyToId; replies will not quote: $e');
     }
+  }
+
+  /// Everything added in v5: the wellness tracker.
+  ///
+  /// **Deliberately only `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT
+  /// EXISTS`.** No `ALTER`, no backfill, no `SELECT` from a table that may not
+  /// exist, no virtual table, no trigger. See `_addReplyToColumn` for why:
+  /// anything in here that can fail takes the whole migration transaction with
+  /// it and leaves the app unable to open its own database. `IF NOT EXISTS` is
+  /// also what lets this one helper serve both `_onCreate` and `_onUpgrade`.
+  static Future<void> _createTrackerTables(Database db) async {
+    // ── Goals ──────────────────────────────────────────────────────────────
+    //
+    // `id` is a *slot* key — 'goal:sleep', 'goal:habit:meditate' — not a
+    // surrogate. Restating a goal corrects it in place rather than leaving two
+    // contradictory targets, the same trick `memory_facts` uses to make the
+    // profile self-correcting when someone changes their mind.
+    //
+    // `label` keeps the user's own words next to the parsed target, so the
+    // prompt can say "sleep 7 hours" rather than reconstructing English from a
+    // number and a unit.
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS goals(
+        id TEXT PRIMARY KEY,
+        metric TEXT NOT NULL,
+        target REAL NOT NULL,
+        cadence TEXT NOT NULL,
+        unit TEXT,
+        weekdays TEXT,
+        emoji TEXT,
+        label TEXT NOT NULL,
+        createdAt TEXT NOT NULL,
+        archivedAt TEXT
+      )
+    ''');
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_goal_active ON goals(archivedAt, createdAt)',
+    );
+
+    // ── One row per metric per local day ───────────────────────────────────
+    //
+    // The composite primary key makes logging an upsert rather than an append:
+    // drinking water four times in a day is one row that grows, not four rows
+    // to sum. That also makes a correction ("no, six hours") a replace.
+    //
+    // `day` is a LOCAL `yyyy-MM-dd` key — see `DayKey` for why it is not UTC.
+    // It is zero-padded so it sorts lexicographically in date order and
+    // `ORDER BY day DESC` needs no date parsing.
+    //
+    // `value` is REAL for everything, including booleans, which are stored as
+    // 0.0 / 1.0. One column and one query path serves "slept 6.5 hours",
+    // "walked 8000 steps" and "meditated: yes".
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS daily_metric(
+        day TEXT NOT NULL,
+        metric TEXT NOT NULL,
+        value REAL NOT NULL,
+        loggedAt TEXT NOT NULL,
+        PRIMARY KEY (day, metric)
+      )
+    ''');
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_metric_day ON daily_metric(day DESC)',
+    );
+  }
+
+  /// Everything added in v6: the to-do list and the weekly routine.
+  ///
+  /// Same rule as `_createTrackerTables` — only `CREATE … IF NOT EXISTS`,
+  /// nothing that can fail, so one helper safely serves `_onCreate` and
+  /// `_onUpgrade` both.
+  static Future<void> _createPlanTables(Database db) async {
+    // ── To-dos ─────────────────────────────────────────────────────────────
+    //
+    // `completedAt` is a nullable timestamp rather than a boolean, so "what did
+    // I finish today" is a query rather than a second column that can disagree
+    // with the first.
+    //
+    // Nothing is deleted on completion. A ticked item stays until the user
+    // clears it, because a list that empties itself gives back nothing for the
+    // effort of having done the work.
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS todos(
+        id TEXT PRIMARY KEY,
+        text TEXT NOT NULL,
+        completedAt TEXT,
+        dueAt TEXT,
+        priority TEXT NOT NULL DEFAULT 'normal',
+        createdAt TEXT NOT NULL
+      )
+    ''');
+    // Open items first, then by when they are due — the order the list is
+    // always read in, so the index matches the query rather than the schema.
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_todo_open ON todos(completedAt, dueAt)',
+    );
+
+    // ── The weekly routine ─────────────────────────────────────────────────
+    //
+    // A repeating shape of the week, not a calendar. `weekdays` is a sorted
+    // comma-joined list of 1-7 (Mon-Sun) — see `RoutineBlock` for why a set
+    // beats a bitmask here.
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS routine_block(
+        id TEXT PRIMARY KEY,
+        label TEXT NOT NULL,
+        startMinute INTEGER NOT NULL,
+        endMinute INTEGER,
+        weekdays TEXT NOT NULL,
+        createdAt TEXT NOT NULL
+      )
+    ''');
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_routine_start ON routine_block(startMinute)',
+    );
   }
 
   /// Everything added in v3: the conversation itself, the episodic index built

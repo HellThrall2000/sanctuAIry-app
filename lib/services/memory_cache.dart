@@ -4,12 +4,15 @@ import '../models/journal_entry.dart';
 import '../models/memory_chunk.dart';
 import 'chunk_store.dart';
 import 'database_service.dart';
+import 'event_store.dart';
 import 'memory_store.dart';
 import '../models/memory_fact.dart';
 import 'note_digest.dart';
 import 'perspective.dart';
 import 'relationship_log.dart';
+import 'plan_store.dart';
 import 'session_summarizer.dart';
+import 'wellness_log.dart';
 
 /// The companion's working memory, held in RAM.
 ///
@@ -54,6 +57,11 @@ class MemoryCache extends ChangeNotifier {
 
   List<MemoryFact> _pinnedFacts = const [];
   String? _relationshipBlock;
+
+  /// Goals, adherence and today's plan, rendered by `WellnessLog.promptBlock`
+  /// and `PlanStore.promptLine`. Cached like the relationship block because it
+  /// is recomputed after every turn and must not cost a query on the send path.
+  String? _wellnessBlock;
   List<NoteDigest> _digests = const [];
 
   /// True when the diary changed after the current conversation was created.
@@ -118,6 +126,7 @@ class MemoryCache extends ChangeNotifier {
   Future<void> _reloadAll() async {
     _pinnedFacts = await _facts.pinnedFacts();
     _relationshipBlock = await _relationship.promptBlock();
+    _wellnessBlock = await _buildWellnessBlock();
     _digests = await _buildDigests();
     _sessions = await _chunks.recentSessions();
     notifyListeners();
@@ -197,11 +206,82 @@ class MemoryCache extends ChangeNotifier {
     }
   }
 
+  /// Call after the user deletes one of their own chat messages.
+  ///
+  /// **Deleting a message has to delete what was learned from it**, or the
+  /// erase is cosmetic: the line leaves the screen while the companion goes on
+  /// retrieving it, quoting something the user believes is gone. That is worse
+  /// than not offering deletion at all, because it looks like it worked.
+  ///
+  /// Three stores, because a message feeds three: the retrieval index
+  /// ([ChunkStore]), the slot-keyed profile ([MemoryStore]) and anything dated
+  /// it mentioned ([EventStore]).
+  ///
+  /// **What this cannot undo** is a session summary. Those condense a whole
+  /// conversation into one chunk, so a sentence can survive inside a paragraph
+  /// that no longer resembles it. Forgetting them wholesale would erase every
+  /// other message in that session too, which is the wrong trade for one
+  /// deletion — "Forget everything" in the memory panel remains the complete
+  /// erase, and the UI says so rather than overpromising here.
+  Future<void> onChatDeleted({
+    required String messageId,
+    required String text,
+  }) async {
+    try {
+      await _facts.forgetSource(messageId);
+      await _chunks.forgetChatMessage(userText: text, messageId: messageId);
+      await EventStore.instance.forgetFrom(text);
+      await _reloadAll();
+      // The knowledge block is rebuilt, but the system instruction was fixed
+      // when the conversation opened. Riding the next turn is how every other
+      // mid-conversation change reaches the model — see [onPlanChanged].
+      _notesUnseen = true;
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Chat delete cache refresh failed: $e');
+    }
+  }
+
   /// Call after the companion learns something from a message.
+  /// Goals + plan as one paragraph, or null.
+  ///
+  /// Two sources, one block: the model gets a single heading for everything it
+  /// knows, which is the lesson `knowledgeBlock` records — four labelled blocks
+  /// taught it to attribute rather than simply know.
+  Future<String?> _buildWellnessBlock() async {
+    try {
+      final wellness = await WellnessLog.instance.promptBlock();
+      final plan = await PlanStore.instance.promptLine();
+      final parts = [
+        if (wellness != null) wellness,
+        if (plan != null) plan,
+      ];
+      return parts.isEmpty ? null : parts.join('\n');
+    } catch (e) {
+      // Same policy as the rest of this class: a degraded cache is survivable,
+      // a send path that throws is not.
+      debugPrint('Wellness block unavailable: $e');
+      return null;
+    }
+  }
+
+  /// Call after anything on the tracker changes mid-conversation.
+  ///
+  /// The system instruction is fixed for the life of a conversation, so a goal
+  /// logged while chatting cannot reach it — the same problem `_notesUnseen`
+  /// solves for diary entries, and solved the same way: the refreshed block
+  /// rides the next user turn.
+  Future<void> onPlanChanged() async {
+    _wellnessBlock = await _buildWellnessBlock();
+    _notesUnseen = true;
+    notifyListeners();
+  }
+
   Future<void> refreshProfile() async {
     try {
       _pinnedFacts = await _facts.pinnedFacts();
       _relationshipBlock = await _relationship.promptBlock();
+      _wellnessBlock = await _buildWellnessBlock();
       notifyListeners();
     } catch (e) {
       debugPrint('Profile refresh failed: $e');
@@ -253,8 +333,14 @@ class MemoryCache extends ChangeNotifier {
     }
 
     final trend = _relationshipBlock;
+    final wellness = _wellnessBlock;
     final sessions = _sessions;
-    if (lines.isEmpty && trend == null && sessions.isEmpty) return null;
+    if (lines.isEmpty &&
+        trend == null &&
+        wellness == null &&
+        sessions.isEmpty) {
+      return null;
+    }
 
     final buffer = StringBuffer(
       'What you know about them. All of it came from them — said to you, or '
@@ -273,6 +359,11 @@ class MemoryCache extends ChangeNotifier {
       buffer.writeln();
       buffer.writeln();
       buffer.write(trend);
+    }
+    if (wellness != null) {
+      buffer.writeln();
+      buffer.writeln();
+      buffer.write(wellness);
     }
     for (final session in sessions) {
       buffer.writeln();
@@ -300,6 +391,7 @@ class MemoryCache extends ChangeNotifier {
     _digests = const [];
     _sessions = const [];
     _notesUnseen = false;
+    _wellnessBlock = null;
     _warm = false;
     notifyListeners();
   }

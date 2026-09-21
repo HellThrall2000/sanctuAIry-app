@@ -129,10 +129,27 @@ class OrganicButton extends StatelessWidget {
             ),
     );
 
-    if (!block) return button;
+    // Dusk lifts a live primary button off the ground with a tinted halo. Not
+    // on secondary or ghost (there is no fill for the light to come from), and
+    // not when disabled — a glow reads as "press me", which is the opposite of
+    // what a disabled control should say.
+    final lit = variant == OrganicButtonVariant.primary &&
+        t.isDark &&
+        onPressed != null;
+    final shaped = !lit
+        ? button
+        : DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(Organic.radiusPill),
+              boxShadow: Organic.duskGlow,
+            ),
+            child: button,
+          );
+
+    if (!block) return shaped;
     return Padding(
       padding: const EdgeInsets.only(top: Organic.space2),
-      child: SizedBox(width: double.infinity, child: button),
+      child: SizedBox(width: double.infinity, child: shaped),
     );
   }
 }

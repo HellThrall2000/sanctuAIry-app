@@ -4,7 +4,9 @@ import '../../models/memory_fact.dart';
 import '../../services/chunk_store.dart';
 import '../../services/memory_cache.dart';
 import '../../services/memory_store.dart';
+import '../../services/plan_store.dart';
 import '../../services/relationship_log.dart';
+import '../../services/wellness_log.dart';
 import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
 import '../organic/organic.dart';
@@ -77,7 +79,7 @@ class _MemoryPanelState extends State<MemoryPanel> {
           ),
           OrganicButton(
             label: 'Forget all',
-            foreground: Organic.danger,
+            foreground: context.tokens.danger,
             variant: OrganicButtonVariant.secondary,
             onPressed: () => Navigator.of(context).pop(true),
           ),
@@ -92,6 +94,9 @@ class _MemoryPanelState extends State<MemoryPanel> {
       await _memory.forgetAll();
       await ChunkStore.instance.clear();
       await RelationshipLog.instance.clear();
+      await WellnessLog.instance.clear();
+      await PlanStore.instance.clear();
+      await WellnessLog.instance.clear();
       await MemoryCache.instance.reset();
       await MemoryCache.instance.warm(force: true);
       await _load();
@@ -138,7 +143,7 @@ class _MemoryPanelState extends State<MemoryPanel> {
                       label: 'Forget all',
                       variant: OrganicButtonVariant.ghost,
                       fontSize: 11,
-                      foreground: Organic.danger,
+                      foreground: t.danger,
                       onPressed: _forgetAll,
                     ),
                 ],

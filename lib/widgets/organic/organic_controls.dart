@@ -8,12 +8,17 @@ import '../../theme/typography.dart';
 /// Used for the "Sunlit / Dusk" theme switch. Options are divided by a 1px
 /// rule (`.seg-opt + .seg-opt { border-left: … }`) and the selected one fills.
 ///
-/// **The selected fill is terracotta in both themes.** The stylesheet says
-/// `.seg-opt:has(input:checked) { background: var(--color-accent) }` and the
-/// prototype overrides only the control's border, not that fill — unlike the
-/// buttons, which it explicitly repaints with the per-theme accent. So under
-/// Dusk the active segment stays `#C67139` rather than becoming apricot. That
-/// is what the reference renders; it is transcribed rather than corrected.
+/// **The selected fill used to be terracotta in both themes.** The stylesheet
+/// says `.seg-opt:has(input:checked) { background: var(--color-accent) }` and
+/// the prototype overrode only the control's border, not that fill — unlike the
+/// buttons, which it explicitly repaints with the per-theme accent. That was
+/// transcribed rather than corrected, and it survived as long as Dusk was
+/// Sunlit dimmed and both palettes shared a hue.
+///
+/// It does not survive neon. A `#C67139` segment sitting on a violet-black
+/// ground between cyan buttons is the one element that reads as a mistake, so
+/// the fill now follows `accentBg` like every other active surface. Sunlit is
+/// unchanged: its `accentBg` *is* the terracotta the stylesheet asked for.
 class OrganicSegmented<T> extends StatelessWidget {
   final List<({T value, String label})> options;
   final T selected;
@@ -41,7 +46,7 @@ class OrganicSegmented<T> extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: isSelected ? Organic.accent : Colors.transparent,
+          color: isSelected ? t.accentBg : Colors.transparent,
           border: first
               ? null
               : Border(left: BorderSide(color: t.border)),
@@ -50,7 +55,7 @@ class OrganicSegmented<T> extends StatelessWidget {
           o.label,
           style: OrganicText.input(
             t,
-            color: isSelected ? Organic.bg : t.text,
+            color: isSelected ? t.onAccent : t.text,
           ).copyWith(fontSize: 13),
         ),
       );

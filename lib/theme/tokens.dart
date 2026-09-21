@@ -48,17 +48,125 @@ abstract final class Organic {
   static const accent2800 = Color(0xFF3D472B);
   static const accent2900 = Color(0xFF272E1B);
 
+  // ── Dusk ───────────────────────────────────────────────────────────
+  //
+  // Dusk began as Sunlit dimmed, then went cyan-neon on near-black, then
+  // indigo-and-violet. It is now blue, and the chat speaks in yellow.
+  //
+  // **Named by role, not by hue.** The previous set was `duskViolet`,
+  // `duskPink` and so on, which meant this recolour would have been a rename
+  // of every call site as well as a change of value. Two recolours was enough
+  // to learn that the constant should say what a colour *does*.
+  //
+  // The grounds carry the accent's hue a few steps darker, which is what makes
+  // a blue control look lit from within the surface rather than pasted onto
+  // it, and nothing here is pure black or pure white — most of why it reads
+  // soft rather than harsh.
+  //
+  // Kept as named constants rather than a fourth nine-step ramp: only a handful
+  // of steps are ever used, and a full ramp would imply a generality that does
+  // not exist.
+
+  /// Primary — buttons, meters, active nav.
+  ///
+  /// Bright rather than deep, and that is forced rather than chosen: blue
+  /// contributes almost nothing to luminance (0.07 of it, against green's
+  /// 0.72), so **no saturated blue carries a white label at 4.5:1** — the best
+  /// available is about 4.0. A bright blue with a dark label clears it
+  /// comfortably instead, and [SanctuaryTokens.onAccent] picks that side on
+  /// its own by measuring, so this needed no special case.
+  static const duskAccent = Color(0xFF4C8DFF);
+
+  /// The accent used as *text*, where the fill is too dark to read at 14px.
+  static const duskAccentSoft = Color(0xFF8AB4FF);
+
+  /// The user's own voice — their chat bubble.
+  ///
+  /// Darkish yellow, and the read receipts are the reason. Ticks are the one
+  /// place this app borrows a convention wholesale: grey for delivered, blue
+  /// for read, which everyone already knows. That only works if both survive
+  /// on the bubble behind them, and against the previous pink they did not.
+  /// Golden yellow — chosen by eye over the alternatives, and the ticks are
+  /// tuned to it rather than the other way round.
+  ///
+  /// A deeper amber was tried because it lets both ticks be *light*, which is
+  /// the half of the range a bright blue naturally lives in. It measured
+  /// better and looked worse: the bubble went brown and stopped reading as
+  /// the warm, spoken-aloud side of the conversation. So the bubble stays
+  /// gold and [duskTick] carries the compromise instead.
+  static const duskVoice = Color(0xFFDCAF44);
+
+  /// Streaks and warmth, in the tracker.
+  static const duskStreak = Color(0xFFFFC24B);
+
+  /// Read receipt, second tick.
+  ///
+  /// **Measures 2.85:1 on [duskVoice], under the 3:1 an icon is supposed to
+  /// hold, and that is deliberate.** The first version cleared 4.65:1 by being
+  /// a deep navy, and on the device it read as a dark mark rather than a blue
+  /// one — which fails the only job the tick has. Blue against gold is very
+  /// nearly a complementary pair, so almost all of the separation here is
+  /// hue and saturation, which the luminance ratio does not measure at all.
+  /// Picked by eye at the size it actually renders, then recorded.
+  static const duskTick = Color(0xFF0B5ED7);
+
+  /// Read receipt, delivered. A true neutral rather than the bubble's own ink
+  /// dimmed — a translucent ink over gold comes out brown, and the whole
+  /// point of the convention is that this one reads *grey* beside the blue.
+  static const duskTickPending = Color(0xFF4A4F58);
+
+  static const duskInk = Color(0xFF0E1422); // app ground
+  static const duskPanel = Color(0xFF151D30); // panels and sheets
+  static const duskSurface = Color(0xFF1E283F); // cards on panels
+  static const duskBorder = Color(0xFF2E3B57); // hairlines
+  static const duskText = Color(0xFFEAF0FA);
+  static const duskMuted = Color(0xFF8C9AB5);
+
+  /// Blue into cyan — Dusk's one gradient, for the ring and the meters.
+  ///
+  /// Two stops, not three: at the width a progress bar actually renders, a
+  /// third stop is invisible at best and muddies the middle at worst.
+  static const duskGradient = [duskAccent, Color(0xFF45C8F0)];
+
+  /// The glow under a primary control.
+  ///
+  /// Tinted with the accent rather than black, and offset almost not at all —
+  /// on a dark ground a black drop shadow does nothing, so the lift has to come
+  /// from light spilling out of the control instead. The negative spread keeps
+  /// it tighter than the shape so it reads as a halo, not a second button.
+  static const duskGlow = [
+    BoxShadow(
+      color: Color(0x4D4C8DFF),
+      offset: Offset(0, 6),
+      blurRadius: 22,
+      spreadRadius: -6,
+    ),
+  ];
+
+  /// Red reads as "system error" beside blue. Dusk gets a softer red that
+  /// belongs to the palette while still stopping the eye.
+  static const duskDanger = Color(0xFFFF6B6B);
+
   /// Logout / destructive. The one literal in the prototype outside the ramps.
   static const danger = Color(0xFFA13A2E);
 
-  /// The blue of a read receipt.
+  /// The blue of a read receipt, Sunlit.
   ///
   /// Deliberately outside both accent ramps and the only cool colour in the
   /// Sunlit palette. That is the point: the tick has to read as *the* read
-  /// signal at a glance, and people already know this colour means it. Rendered
-  /// in sage or terracotta it would just look like more chrome. Desaturated
-  /// from the familiar messenger blue so it sits on warm sand without shouting.
-  static const tickRead = Color(0xFF4F9BC9);
+  /// signal at a glance, and people already know this colour means it.
+  ///
+  /// **Was #4F9BC9, which was invisible.** It had been chosen to sit on the
+  /// page — "warm sand without shouting" — but a tick is never drawn on the
+  /// page. It is drawn inside the user's own terracotta bubble, where that
+  /// blue measured 1.18:1 and the delivered tick 1.09:1, so in practice the
+  /// light theme had no read receipts at all. Both are now picked against
+  /// the bubble.
+  static const tickRead = Color(0xFF0B3570);
+
+  /// Delivered-but-unread, Sunlit. Dark enough to hold on terracotta, and
+  /// neutral so it reads grey beside the blue.
+  static const tickPending = Color(0xFF33373E);
 
   // --- Spacing (`--space-*`) --------------------------------------------
   //
@@ -163,8 +271,53 @@ class SanctuaryTokens extends ThemeExtension<SanctuaryTokens> {
   /// Foreground for anything sitting on [accentBg].
   ///
   /// The prototype writes `color: {{ v.bgApp }}` on every primary button and
-  /// avatar, so this is the page background rather than a separate token.
-  Color get onAccent => bgApp;
+  /// avatar, and that held while both accents were far from the page ground —
+  /// Sunlit's dark sage under off-white, Dusk's bright cyan under near-black.
+  /// A mid-violet is not: at 18% luminance it is *closer* to the indigo ground
+  /// than to anything, so `bgApp` would put near-black on near-violet.
+  ///
+  /// So pick whichever of the theme's two poles the accent is furthest from.
+  /// This returns exactly what the prototype specified for Sunlit, and the
+  /// light label a violet button actually needs for Dusk.
+  Color get onAccent =>
+      _contrast(text, accentBg) >= _contrast(bgApp, accentBg) ? text : bgApp;
+
+  /// WCAG relative contrast between two opaque colours, 1.0 to 21.0.
+  ///
+  /// Measured rather than approximated by comparing luminance *distance*: the
+  /// two are not the same ranking, and they disagreed on exactly the colour
+  /// that prompted this. Cheap enough to run per build — two luminance
+  /// computations, no allocation.
+  static double _contrast(Color a, Color b) {
+    final x = a.computeLuminance();
+    final y = b.computeLuminance();
+    final hi = x > y ? x : y;
+    final lo = x > y ? y : x;
+    return (hi + 0.05) / (lo + 0.05);
+  }
+
+  /// Destructive actions. Derived rather than stored, so it needs no
+  /// constructor, copyWith or lerp entry — the same trick as [onAccent].
+  /// Sunlit's brick red disappears on indigo; Dusk gets a pink-red
+  /// that belongs to the palette and still stops the eye.
+  Color get danger => isDark ? Organic.duskDanger : Organic.danger;
+
+  /// Read receipts, second tick.
+  ///
+  /// The one convention this app borrows outright — blue means read — so it is
+  /// measured against [userBubbleBg], the only place it is ever drawn, rather
+  /// than against the page.
+  Color get tickRead => isDark ? Organic.duskTick : Organic.tickRead;
+
+  /// Read receipts, delivered but unread.
+  ///
+  /// Both themes name this explicitly. Sunlit used to dim the bubble's own
+  /// cream ink, which came out at 1.09:1 on terracotta — a tick nobody could
+  /// see. Dusk cannot dim its ink either: ink over yellow comes out brown, and
+  /// a brown tick beside a blue one loses the grey/blue contrast the whole
+  /// convention is made of.
+  Color get tickPending =>
+      isDark ? Organic.duskTickPending : Organic.tickPending;
 
   bool get isDark => bgApp.computeLuminance() < 0.5;
 
@@ -190,24 +343,33 @@ class SanctuaryTokens extends ThemeExtension<SanctuaryTokens> {
     assistantBubbleFg: Organic.text,
   );
 
-  /// Dusk — deep blue-black ground, apricot chrome.
+  /// Dusk — navy ground, blue chrome, and a yellow voice.
   ///
-  /// The ground is blue (hue 250) while the bubbles stay warm (the neutral
-  /// ramp is hue 95). That contrast is deliberate in the prototype: the room
-  /// goes cold, the conversation stays warm.
+  /// Every ground here is the same hue as the accent, several steps darker.
+  /// That is what separates this from a grey dark theme with a blue button in
+  /// it: the surfaces are quietly tinted, so the accent belongs to the room.
+  ///
+  /// The bubble is the deliberate exception. The room is cool and the user's
+  /// own voice is warm, which is the one contrast in the palette that is about
+  /// meaning rather than depth — and it is what lets the read receipts keep
+  /// the grey/blue convention everyone already reads without thinking.
   static const dusk = SanctuaryTokens(
-    bgApp: Color(0xFF0B151F), // oklch(19% 0.025 250)
-    bgPanel: Color(0xFF131E2A), // oklch(23% 0.028 250)
-    bgSurface: Color(0xFF192532), // oklch(26% 0.03 250)
-    text: Color(0xFFE0E5EB), // oklch(92% 0.01 250)
-    muted: Color(0xFF7D8792), // oklch(62% 0.02 250)
-    border: Color(0xFF273442), // oklch(32% 0.03 250)
-    accentBg: Organic.accent400,
-    accentText: Organic.accent300,
-    userBubbleBg: Organic.accent400,
-    userBubbleFg: Organic.neutral900,
-    assistantBubbleBg: Organic.neutral800,
-    assistantBubbleFg: Organic.neutral100,
+    bgApp: Organic.duskInk,
+    bgPanel: Organic.duskPanel,
+    bgSurface: Organic.duskSurface,
+    text: Organic.duskText,
+    muted: Organic.duskMuted,
+    border: Organic.duskBorder,
+    accentBg: Organic.duskAccent,
+    // Lighter than accentBg on purpose: this is used as *text* on the dark
+    // ground, where the blue that reads well as a fill goes muddy at 14px.
+    accentText: Organic.duskAccentSoft,
+    // The user speaks in yellow, the companion in navy. Two voices that are
+    // obviously different at a glance, which is most of what a chat needs.
+    userBubbleBg: Organic.duskVoice,
+    userBubbleFg: Organic.duskInk,
+    assistantBubbleBg: Color(0xFF202B44),
+    assistantBubbleFg: Organic.duskText,
   );
 
   @override

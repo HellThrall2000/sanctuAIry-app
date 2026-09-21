@@ -58,8 +58,17 @@ class MemoryStore {
   ///
   /// Returns the facts learned, so the caller can tell the user something was
   /// remembered rather than doing it silently.
-  Future<List<MemoryFact>> learnFromMessage(String text) async {
-    final facts = FactExtractor.extract(text, source: FactSource.chat);
+  Future<List<MemoryFact>> learnFromMessage(String text,
+      {String? sourceId}) async {
+    // [sourceId] is the message it came from, so deleting that message can
+    // take the fact with it. Facts are slot-keyed, so a later message that
+    // overwrites the same slot also takes ownership of it — which is right:
+    // the newer statement is the one the value now comes from.
+    final facts = FactExtractor.extract(
+      text,
+      source: FactSource.chat,
+      sourceId: sourceId,
+    );
     await remember(facts);
     return facts;
   }

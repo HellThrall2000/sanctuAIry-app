@@ -8,6 +8,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'auth_service.dart';
+import 'day_key.dart';
 import 'firebase_gateway.dart';
 
 /// Counts how much the app is used. Nothing else.
@@ -293,15 +294,12 @@ class UsageMetrics {
 
   // ── Local ledger ────────────────────────────────────────────────────────
 
-  static String _todayKey() => _keyFor(DateTime.now());
+  // Local dates, deliberately, not UTC — see [DayKey], which now owns this rule
+  // so the usage ledger and the wellness tracker cannot disagree about when a
+  // day ends.
+  static String _todayKey() => DayKey.today();
 
-  /// Local dates, deliberately, not UTC. "How long did I use this on Tuesday"
-  /// means the user's Tuesday; a UTC key would split their evening in two for
-  /// anyone west of Greenwich.
-  static String _keyFor(DateTime when) =>
-      '${when.year.toString().padLeft(4, '0')}-'
-      '${when.month.toString().padLeft(2, '0')}-'
-      '${when.day.toString().padLeft(2, '0')}';
+  static String _keyFor(DateTime when) => DayKey.of(when);
 
   Future<void> _loadLedger() async {
     try {

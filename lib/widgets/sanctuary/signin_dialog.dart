@@ -116,7 +116,7 @@ class _SignInDialogState extends State<SignInDialog> {
           ),
           OrganicButton(
             label: 'Delete',
-            foreground: Organic.danger,
+            foreground: context.tokens.danger,
             variant: OrganicButtonVariant.secondary,
             onPressed: () => Navigator.of(context).pop(true),
           ),
@@ -172,7 +172,7 @@ class _SignInDialogState extends State<SignInDialog> {
           const SizedBox(height: Organic.space2),
           Text(
             _error!,
-            style: OrganicText.body(t).copyWith(color: Organic.danger),
+            style: OrganicText.body(t).copyWith(color: t.danger),
           ),
         ],
         const SizedBox(height: Organic.space3),
@@ -203,7 +203,7 @@ class _SignInDialogState extends State<SignInDialog> {
                 label: 'Delete account',
                 variant: OrganicButtonVariant.ghost,
                 fontSize: 12,
-                foreground: Organic.danger,
+                foreground: t.danger,
                 onPressed: _auth.isBusy ? null : _delete,
               ),
             ],

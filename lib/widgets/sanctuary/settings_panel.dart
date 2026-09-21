@@ -183,7 +183,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
           variant: OrganicButtonVariant.secondary,
           fontSize: 11,
           block: true,
-          foreground: Organic.danger,
+          foreground: t.danger,
           onPressed: _confirmClearConversation,
         ),
       ],
@@ -206,7 +206,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
           OrganicButton(
             label: 'Clear',
             variant: OrganicButtonVariant.secondary,
-            foreground: Organic.danger,
+            foreground: context.tokens.danger,
             onPressed: () => Navigator.of(context).pop(true),
           ),
         ],
@@ -257,7 +257,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
             label: 'Logout Session',
             variant: OrganicButtonVariant.secondary,
             fontSize: 10,
-            foreground: Organic.danger,
+            foreground: t.danger,
             onPressed: () async {
               // Both halves, so "logged out" means one thing.
               await AuthService.instance.signOut();

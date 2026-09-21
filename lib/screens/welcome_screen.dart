@@ -125,7 +125,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                   if (_error != null) ...[
                     Text(
                       _error!,
-                      style: OrganicText.body(t).copyWith(color: Organic.danger),
+                      style: OrganicText.body(t).copyWith(color: t.danger),
                     ),
                     const SizedBox(height: Organic.space3),
                   ],

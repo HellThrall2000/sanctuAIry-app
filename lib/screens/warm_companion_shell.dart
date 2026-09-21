@@ -8,6 +8,7 @@ import '../widgets/organic/organic.dart';
 import '../widgets/sanctuary/chat_view.dart';
 import '../widgets/sanctuary/diary_panel.dart';
 import '../widgets/sanctuary/settings_panel.dart';
+import '../widgets/sanctuary/wellness_panel.dart';
 import '../widgets/sanctuary/signin_dialog.dart';
 
 /// Variation **1a — Warm Companion**, the wide shell.
@@ -36,12 +37,25 @@ class WarmCompanionShell extends StatefulWidget {
 class _WarmCompanionShellState extends State<WarmCompanionShell> {
   bool _leftOpen = false;
   bool _rightOpen = false;
+
+  /// The tracker, which opens over the left edge like the controls do.
+  ///
+  /// A third boolean rather than a single enum because the two existing drawers
+  /// sit on opposite edges and can in principle be open together; collapsing
+  /// them into one "which drawer" value would quietly change that. What must not
+  /// happen is two drawers on the *same* edge at once, which is why opening this
+  /// closes the controls.
+  bool _wellnessOpen = false;
   List<JournalEntry> _allowedJournals = const [];
 
   final LocalProfile _profile = LocalProfile.instance;
 
   static const _leftWidth = 270.0;
   static const _rightWidth = 320.0;
+
+  /// Wider than the controls drawer: this one carries cards, a progress ring and
+  /// a seven-day strip, and 270 crushes the strip into unreadable dots.
+  static const _wellnessWidth = 360.0;
   static const _headerHeight = 66.0;
 
   @override
@@ -64,6 +78,7 @@ class _WarmCompanionShellState extends State<WarmCompanionShell> {
   void _closeAll() => setState(() {
         _leftOpen = false;
         _rightOpen = false;
+        _wellnessOpen = false;
       });
 
   @override
@@ -99,6 +114,14 @@ class _WarmCompanionShellState extends State<WarmCompanionShell> {
             ),
           ),
           _drawer(
+            side: _DrawerSide.left,
+            open: _wellnessOpen,
+            width: _wellnessWidth,
+            title: 'TrAIcker',
+            onClose: () => setState(() => _wellnessOpen = false),
+            child: const WellnessPanel(),
+          ),
+          _drawer(
             side: _DrawerSide.right,
             open: _rightOpen,
             width: _rightWidth,
@@ -132,7 +155,10 @@ class _WarmCompanionShellState extends State<WarmCompanionShell> {
                 OrganicIconButton(
                   bordered: true,
                   tooltip: 'Open Sanctuary Controls',
-                  onPressed: () => setState(() => _leftOpen = true),
+                  onPressed: () => setState(() {
+                    _leftOpen = true;
+                    _wellnessOpen = false;
+                  }),
                   child: OrganicMenuDots(color: t.text),
                 ),
                 const SizedBox(width: 12),
@@ -160,6 +186,16 @@ class _WarmCompanionShellState extends State<WarmCompanionShell> {
                 // the diary and account controls at the far right.
                 const Spacer(),
                 const SizedBox(width: 12),
+                OrganicButton(
+                  label: 'TrAIcker',
+                  variant: OrganicButtonVariant.secondary,
+                  fontSize: 11,
+                  onPressed: () => setState(() {
+                    _wellnessOpen = true;
+                    _leftOpen = false;
+                  }),
+                ),
+                const SizedBox(width: 8),
                 OrganicButton(
                   label: 'Open Diary',
                   variant: OrganicButtonVariant.secondary,
@@ -189,7 +225,7 @@ class _WarmCompanionShellState extends State<WarmCompanionShell> {
   }
 
   Widget _backdrop() {
-    final open = _leftOpen || _rightOpen;
+    final open = _leftOpen || _rightOpen || _wellnessOpen;
     return IgnorePointer(
       ignoring: !open,
       child: AnimatedOpacity(
