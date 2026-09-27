@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <!-- Needed for exactly two things, both one-off: fetching the model on first
          run, and Google sign-in when the user chooses it. No conversation,
          diary entry or memory ever crosses the network. -->
@@ -32,12 +33,34 @@
          categories and carries no per-run ceiling. See docs/RELEASE.md — Play
          asks for written justification for this type. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+
+    <!-- firebase_analytics merges this in. There is no advertising in the app,
+         and keeping it would oblige the Play Data safety form to declare
+         advertising-ID collection. Removed, and collection disabled below. -->
+    <uses-permission android:name="com.google.android.gms.permission.AD_ID"
+        tools:node="remove"/>
+    <!-- Privacy Sandbox ad permissions, merged in by the same library for the
+         same reason. Removed for the same reason. -->
+    <uses-permission android:name="android.permission.ACCESS_ADSERVICES_AD_ID"
+        tools:node="remove"/>
+    <uses-permission android:name="android.permission.ACCESS_ADSERVICES_ATTRIBUTION"
+        tools:node="remove"/>
     <application
         android:label="sanctuAIry"
         android:name="${applicationName}"
         android:largeHeap="true"
         android:icon="@mipmap/ic_launcher"
-        android:roundIcon="@mipmap/ic_launcher_round">
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules">
+        <!-- Backups off: the privacy policy promises that conversations, diary
+             entries and memories are never uploaded, and Android Auto Backup
+             would otherwise copy the app's databases to the user's Google Drive.
+             Restored flutter_secure_storage data also fails to decrypt on a new
+             device (the Keystore key does not travel), which crashes on read.
+             allowBackup covers Android 11 and below; dataExtractionRules covers
+             12+, including device-to-device transfer. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -69,6 +92,11 @@
                     it must finish even if they switch away, and nothing leaves
                     the device." />
         </service>
+
+        <!-- See the AD_ID removal above. -->
+        <meta-data
+            android:name="google_analytics_adid_collection_enabled"
+            android:value="false" />
 
         <meta-data
             android:name="flutterEmbedding"

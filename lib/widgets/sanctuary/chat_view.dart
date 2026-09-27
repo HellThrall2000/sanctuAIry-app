@@ -13,6 +13,7 @@ import '../../services/background_generation.dart';
 import '../../services/chat_store.dart';
 import '../../models/wellness.dart';
 import '../../services/chunk_store.dart';
+import '../../services/content_report.dart';
 import '../../services/daily_review.dart';
 import '../../services/day_key.dart';
 import '../../services/wellness_log.dart';
@@ -1548,6 +1549,121 @@ class _ChatViewState extends State<ChatView> {
     await _deleteMessage(msg);
   }
 
+  /// What long-pressing a companion reply offers: report it, or delete it.
+  ///
+  /// Reporting exists because Google Play's AI-Generated Content policy
+  /// requires a way to flag offensive output from inside the app. It sits on
+  /// the same gesture as delete so that neither needs a button on every bubble.
+  Future<void> _companionActions(ChatMessage msg) async {
+    final choice = await OrganicDialog.show<String>(
+      context,
+      OrganicDialog(
+        title: 'This reply',
+        actions: [
+          OrganicButton(
+            label: 'Cancel',
+            variant: OrganicButtonVariant.secondary,
+            onPressed: () => Navigator.of(context).pop(),
+          ),
+          OrganicButton(
+            label: 'Report',
+            variant: OrganicButtonVariant.secondary,
+            onPressed: () => Navigator.of(context).pop('report'),
+          ),
+          OrganicButton(
+            label: 'Delete',
+            foreground: context.tokens.danger,
+            variant: OrganicButtonVariant.secondary,
+            onPressed: () => Navigator.of(context).pop('delete'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (choice == 'report') await _reportReply(msg);
+    if (choice == 'delete') await _confirmDelete(msg);
+  }
+
+  /// Asks why, then sends the reply to [ContentReports].
+  ///
+  /// The dialog says exactly what is sent, because this is the only path on
+  /// which text leaves the device, and a user who has been told everything stays
+  /// local is owed the exception in plain words before it happens.
+  Future<void> _reportReply(ChatMessage msg) async {
+    final reports = ContentReports.instance;
+    if (!reports.isAvailable) {
+      await OrganicDialog.show<void>(
+        context,
+        OrganicDialog(
+          title: 'Can\'t send a report right now',
+          body: 'Reporting needs you to be signed in. You can still delete '
+              'the reply.',
+          actions: [
+            OrganicButton(
+              label: 'OK',
+              variant: OrganicButtonVariant.secondary,
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    final reason = await OrganicDialog.show<ReportReason>(
+      context,
+      OrganicDialog(
+        title: 'Report this reply?',
+        body: 'Only the text of this one reply is sent, with the reason you '
+            'pick. Your own messages, your diary and your name are not '
+            'included.',
+        children: [
+          for (final r in ReportReason.values)
+            OrganicButton(
+              label: r.label,
+              block: true,
+              variant: OrganicButtonVariant.secondary,
+              onPressed: () => Navigator.of(context).pop(r),
+            ),
+        ],
+        actions: [
+          OrganicButton(
+            label: 'Cancel',
+            variant: OrganicButtonVariant.secondary,
+            onPressed: () => Navigator.of(context).pop(),
+          ),
+        ],
+      ),
+    );
+    if (reason == null || !mounted) return;
+
+    final queued = await reports.submit(
+      reply: msg.text,
+      reason: reason,
+      modelProfileId: _settings.profile.id,
+    );
+    if (!mounted) return;
+
+    await OrganicDialog.show<void>(
+      context,
+      OrganicDialog(
+        title: queued ? 'Thanks for reporting' : 'Report not sent',
+        body: queued
+            ? 'Reports are reviewed to make the companion safer. If you are '
+                'offline it goes as soon as you reconnect.'
+            : 'Something went wrong sending the report. Please try again '
+                'later.',
+        actions: [
+          OrganicButton(
+            label: 'OK',
+            variant: OrganicButtonVariant.secondary,
+            onPressed: () => Navigator.of(context).pop(),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// Removes [msg] from the screen, the database, and the companion's memory.
   ///
   /// **The three have to move together.** Deleting only the row leaves the
@@ -1753,7 +1869,12 @@ class _ChatViewState extends State<ChatView> {
             // transcript is the thing being read, and a delete affordance on
             // each line would compete with it. This is also where people
             // already reach for it in a messaging app.
-            onLongPress: () => _confirmDelete(msg),
+            //
+            // A companion reply also offers "Report" here — see
+            // [_companionActions].
+            onLongPress: () => msg.role == ChatRole.companion
+                ? _companionActions(msg)
+                : _confirmDelete(msg),
             child: Container(
             padding: s.bubblePadding,
             decoration: BoxDecoration(

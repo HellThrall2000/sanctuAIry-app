@@ -1,6 +1,6 @@
 # Privacy Policy — sanctuAIry
 
-**Last updated: 3 August 2026**
+**Last updated: 26 September 2026**
 
 sanctuAIry is a private journalling and self-reflection app with an AI companion
 that runs on your phone. This policy explains exactly what we do and do not
@@ -33,8 +33,9 @@ anyone is using it.
 - Your passcode
 - The AI model itself, once downloaded
 
-None of this is uploaded, backed up to us, or transmitted anywhere. Deleting the
-app deletes all of it.
+None of this is uploaded, backed up to us, or transmitted anywhere — the app
+also opts out of Android's automatic backup to Google Drive, so it is not copied
+there either. Deleting the app deletes all of it.
 
 **The companion runs on your phone.** Your messages are not sent to OpenAI,
 Google, Anthropic or any other service for processing. This is why the app has to
@@ -77,6 +78,15 @@ Usage is recorded on your device and sent when you next have a connection, so
 using the app offline still counts. Once a day's figures reach our server, the
 local copy is deleted from your phone.
 
+### Replies you report
+
+If you long-press one of the companion's replies and choose **Report**, the text
+of that one reply is sent to us, with the reason you picked, the app version and
+your platform. **This is the only time any text leaves your phone, and it only
+happens when you ask.** Your own messages, your diary and your name or email are
+not included, and the report is not linked to your account. We use reports only
+to find and fix harmful or offensive output, and delete them once reviewed.
+
 ### Analytics
 
 We use Firebase Analytics for aggregate figures such as daily active users.
@@ -90,7 +100,8 @@ send Analytics no personal information and no content.
 
 To be unambiguous, we do not collect, transmit or store:
 
-- The text of your messages, or the companion's replies
+- The text of your messages, or the companion's replies (except one you
+  choose to report, as above)
 - The text or titles of your diary entries
 - Anything the companion has remembered about you
 - Your mood, sentiment or emotional state
@@ -98,7 +109,8 @@ To be unambiguous, we do not collect, transmit or store:
 - Your contacts, photos, files, precise location, or microphone
 
 The app requests no permission that would allow it to. Its only network use is
-downloading the model once, and signing in if you ask it to.
+downloading the model once, signing in, sending the usage counts above, and
+sending a report if you file one.
 
 ---
 
@@ -126,7 +138,7 @@ We keep usage records for as long as the account exists.
 | You want to | Do this |
 | --- | --- |
 | Use the app without an account | On iOS, choose "Continue without an account" on the first screen. Not available on Android |
-| Delete your account and its usage record | **Settings → your profile → Delete account.** Immediate and permanent |
+| Delete your account and its usage record | **Settings → your profile → Delete account.** Immediate and permanent. Without the app, see [Delete your account](DELETE_ACCOUNT.md) |
 | Delete what the companion knows about you | **Settings → Companion Memory → Review & Forget** |
 | Delete everything | Uninstall the app. Everything on the device goes with it |
 
