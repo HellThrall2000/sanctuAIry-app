@@ -103,8 +103,31 @@ service cloud.firestore {
       allow delete: if isOwner(uid);
     }
 
+    // A user's report of one companion reply — Google Play's AI-Generated
+    // Content policy requires in-app flagging. See lib/services/content_report.dart.
+    //
+    // Create-only: no client can read, edit or delete a report, including the
+    // one who sent it. Reviewed in the Firebase console. Deliberately carries no
+    // uid, so it names nobody and account deletion has nothing here to clear.
+    match /reports/{reportId} {
+      function isValidReport() {
+        let d = request.resource.data;
+        return d.keys().hasOnly(['reason', 'reply', 'modelProfile',
+                                 'appVersion', 'platform', 'createdAt'])
+            && d.reason in ['harmful', 'offensive', 'inaccurate']
+            && d.reply is string && d.reply.size() > 0 && d.reply.size() <= 4000
+            && d.modelProfile is string && d.modelProfile.size() < 100
+            && d.appVersion is string && d.appVersion.size() < 50
+            && d.platform is string && d.platform.size() < 30
+            && d.createdAt == request.time;
+      }
+
+      allow create: if request.auth != null && isValidReport();
+      allow read, update, delete: if false;
+    }
+
     // Nothing else in this project is reachable from a client. The app writes
-    // exactly one collection; anything else appearing here would be someone
+    // exactly these collections; anything else appearing here would be someone
     // else's idea, not ours.
     match /{document=**} {
       allow read, write: if false;

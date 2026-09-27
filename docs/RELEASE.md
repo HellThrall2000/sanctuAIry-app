@@ -296,13 +296,18 @@ address, a display name and a persistent user ID *are* personal data. Declare:
 | Name | Yes, **required** | Analytics | As above |
 | User IDs | Yes | Analytics | The Firebase uid |
 | App interactions | Yes | Analytics | Daily hours, session counts, action counts |
+| Device or other IDs | Yes | Analytics | Firebase Analytics' app-instance ID. **Not** the advertising ID — `AD_ID` is stripped in the manifest |
+| Other user-generated content | Yes, **optional** | App functionality (safety) | Only a companion reply the user chooses to **Report**. Not linked to the account |
 | Crash logs / diagnostics | No | | The engine log stays on the device |
 | **Messages** | **No** | | Never leaves the device |
 | **Health and fitness** | **No** | | Never leaves the device |
 | **Photos, contacts, location, files** | **No** | | Not collected at all |
 
 Also declare: data **is** encrypted in transit, and users **can** request
-deletion (the account dialog does it in-app).
+deletion (the account dialog does it in-app). Play also requires a **web URL**
+for deletion requests that works without the app — publish
+[`docs/DELETE_ACCOUNT.md`](DELETE_ACCOUNT.md) next to the privacy policy and
+paste its URL into the *Data deletion* question.
 
 Mark email and name as **required, not optional**, because on Android they are:
 [`Consent.requiresAccount`](../lib/services/consent.dart) gates the app behind
@@ -372,6 +377,49 @@ Expect to be asked about these; none are in Play's restricted set.
 `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` was **removed** — it was declared but
 never called, and it *is* on Play's restricted list.
 
+### AI-generated content — in-app reporting
+
+Play's AI-Generated Content policy requires generative AI apps to let users
+report offensive output **without leaving the app**. Long-pressing a companion
+reply offers **Report**, which writes the reply text and a reason to the
+`reports` collection
+([`content_report.dart`](../lib/services/content_report.dart)). Clients can only
+create reports, never read them — review them in the Firebase console under
+Firestore → `reports`. **Redeploy the rules** (`firebase deploy --only
+firestore:rules`) or every report is refused.
+
+### App access — reviewers must be able to get in
+
+Sign-in is mandatory on Android, so under *App content → App access* choose
+**"All or some functionality is restricted"** and explain: *"Sign in with any
+Google account. On first launch the app downloads a 2.4 GB on-device model over
+Wi-Fi; chat is available once it finishes."* Reviewers who hit a login wall
+with no instructions reject the build.
+
+### 16 KB memory page sizes
+
+Since November 2025 Play rejects new apps and updates targeting Android 15+
+whose native libraries are not 16 KB aligned. This build ships Flutter's engine
+and `liblitertlm_jni.so`; check the release APK before the first upload:
+
+```bash
+unzip -o build/app/outputs/flutter-apk/app-release.apk 'lib/arm64-v8a/*' -d /tmp/apk
+for so in /tmp/apk/lib/arm64-v8a/*.so; do
+  echo "$so $(objdump -p "$so" | awk '/LOAD/{print $NF; exit}')"
+done   # every line should end 2**14 or higher
+```
+
+Play Console also flags it under *App bundle explorer → Memory page size*. A
+failing library means bumping it (for litertlm, see the pin in
+`android/app/build.gradle`).
+
+### Backups are off
+
+`android:allowBackup="false"` plus `data_extraction_rules.xml`. Without them
+Android Auto Backup copies the chat and diary databases to Google Drive,
+contradicting the privacy policy, and restored `flutter_secure_storage` data
+cannot be decrypted on the new device.
+
 ### Everything else
 
 - **Privacy policy URL** — mandatory. Publish [`docs/PRIVACY.md`](PRIVACY.md)
@@ -420,7 +468,13 @@ Worth being clear that this is a port, not a checkbox:
 - [ ] `android/app/google-services.json` in place
 - [ ] Firestore rules deployed
 - [ ] `version:` bumped in `pubspec.yaml`
+- [ ] Contact address filled in `docs/PRIVACY.md` and `docs/DELETE_ACCOUNT.md`
 - [ ] Privacy policy published and URL pasted into the console
+- [ ] Account deletion page published and URL pasted into Data safety
+- [ ] App access instructions entered (sign-in is required)
+- [ ] Release APK native libraries checked for 16 KB alignment
+- [ ] Report a companion reply on a device and see it arrive in Firestore
+- [ ] Model URL moved off `r2.dev` to a custom domain (rate-limited otherwise)
 - [ ] Data safety form filled per the table above
 - [ ] Health apps declaration completed
 - [ ] `specialUse` foreground service justified in the console (text above)
